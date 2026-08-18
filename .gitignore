@@ -1,0 +1,13 @@
+bin/
+obj/
+logs/
+app_data/
+__pycache__/
+*.pyc
+.vs/
+.venv/
+# 由 scripts/setup-ocr.sh 產生的本機引擎設定(含各站不同的端點/路徑)
+src/ai-service/.env
+src/ai-service/.env.bak
+# 由 scripts/setup-ocr.sh 產生
+scripts/start-vllm.sh

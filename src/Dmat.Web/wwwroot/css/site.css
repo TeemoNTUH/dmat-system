@@ -1,0 +1,114 @@
+/* DMAT 站點樣式:檢傷紅黃綠黑統一色票(架構書 3.4) */
+:root {
+    --triage-red: #dc3545;
+    --triage-yellow: #ffc107;
+    --triage-green: #198754;
+    --triage-black: #212529;
+    --triage-palliative: #6f42c1;
+}
+
+/* ------------------------------------------------------------------
+   全站縮放基準
+   ------------------------------------------------------------------
+   Bootstrap 與本站樣式的字級、內距、間距幾乎全用 rem,rem 又以
+   html 的字級為基準 —— 所以改這一個數字,整個介面(字、按鈕、卡片、
+   表格列高)會等比放大,不必逐處調整。
+
+   16px 是瀏覽器預設;24px = 放大 50%。現場戴手套、光線差、
+   距離螢幕遠時看得清楚是基本要求,因此預設就放大。
+
+   要調整縮放請只改這裡。用 zoom 或 transform: scale() 也能放大,
+   但前者不是所有瀏覽器都支援、後者會讓版面寬度算錯而出現橫向捲軸。 */
+html { font-size: 24px; }
+
+/* 小螢幕降回 20px(放大 25%)。
+   手機寬度只有 360~430px,若同樣放大 50%,表格與篩選列會擠到爆版、
+   出現橫向捲動 —— 那反而更難用。 */
+@media (max-width: 575.98px) {
+    html { font-size: 20px; }
+}
+
+body { min-height: 100vh; }
+
+/* 檢傷等級圓形徽章 */
+.triage-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 700;
+}
+.triage-1 { background: var(--triage-red); }
+.triage-2 { background: var(--triage-yellow); color: #212529; }
+.triage-3 { background: var(--triage-green); }
+.triage-4 { background: var(--triage-black); }
+.triage-5 { background: var(--triage-palliative); }
+
+/* 儀表板統計卡 */
+.stat-card { border-width: 2px; }
+.triage-bg-1 { border-color: var(--triage-red); color: var(--triage-red); }
+.triage-bg-2 { border-color: var(--triage-yellow); color: #b38600; }
+.triage-bg-3 { border-color: var(--triage-green); color: var(--triage-green); }
+.triage-bg-4 { border-color: var(--triage-black); color: var(--triage-black); }
+.triage-bg-5 { border-color: var(--triage-palliative); color: var(--triage-palliative); }
+
+/* 覆核介面:信心不足欄位 */
+.field-need-review { background: #fff3cd; outline: 2px solid #ffc107; }
+.conf-badge { font-size: 0.65rem; vertical-align: text-top; }
+
+/* ------------------------------------------------------------------
+   大量傷患醫療應變戰情看板(儀表板上方)
+   版面依使用者提供的白色版模板,但色票一律沿用本站既有的檢傷變數,
+   以與下方傷情態勢儀表板視覺一致(架構書 3.4 統一色票)。
+   ------------------------------------------------------------------ */
+.board-section-title {
+    font-size: .9rem;
+    font-weight: 700;
+    border-left: 4px solid #0d6efd;
+    padding-left: .5rem;
+    margin-bottom: .75rem;
+}
+
+/* 檢傷分佈長條 */
+.board-bar-row { display: flex; align-items: center; gap: .625rem; margin-bottom: .75rem; }
+.board-bar-row:last-child { margin-bottom: 0; }
+.board-bar-name { width: 5.5rem; flex-shrink: 0; font-size: .78rem; color: #4b5563; }
+.board-bar-track {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: .3rem;
+    height: 1.375rem;
+    overflow: hidden;
+}
+.board-bar-fill {
+    height: 100%;
+    /* 數字變動時長條平滑過渡,指揮官比較容易察覺哪一項在成長 */
+    transition: width .45s ease;
+    min-width: 0;
+}
+.board-bar-fill.triage-1 { background: var(--triage-red); }
+.board-bar-fill.triage-2 { background: var(--triage-yellow); }
+.board-bar-fill.triage-3 { background: var(--triage-green); }
+.board-bar-fill.triage-4 { background: var(--triage-black); }
+.board-bar-count { width: 3rem; flex-shrink: 0; font-size: .78rem; font-weight: 700; text-align: right; }
+
+/* 動向與處置狀態 */
+.board-status-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: .5rem;
+    padding: .5rem .875rem;
+    font-size: .85rem;
+}
+.board-status-item + .board-status-item { margin-top: .5rem; }
+.board-status-item.highlight { background: #eaf2fe; border-color: #0d6efd; }
+.board-status-item .num { font-size: 1.05rem; font-weight: 700; }
+.board-status-item.highlight .num { color: #0a58ca; }
+

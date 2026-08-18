@@ -1,0 +1,203 @@
+@using Dmat.Web.Services
+@using Dmat.Web.Services.Ocr
+@model ReviewDetailVm
+@{
+    ViewData["Title"] = "覆核紀錄單";
+    var triageLabels = new Dictionary<string, string>
+    {
+        ["1"] = "1 復甦急救(紅)", ["2"] = "2 緊急(黃)", ["3"] = "3 非緊急(綠)",
+        ["4"] = "4 死亡(黑)", ["4-1"] = "4-1 緩和治療",
+    };
+
+    string ConfBadge(ReviewFieldVm f)
+    {
+        if (f.Confidence is not { } c) return "";
+        var cls = f.NeedReview ? "bg-warning text-dark" : c >= 0.9 ? "bg-success" : "bg-secondary";
+        return $"<span class=\"badge {cls} conf-badge\">{c:P0}</span>";
+    }
+}
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <h4 class="mb-0">覆核:AI 辨識結果確認</h4>
+    <div class="d-flex gap-2">
+        <form method="post" asp-action="Reanalyze" asp-route-id="@Model.ImageId" class="d-inline">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-outline-primary btn-sm"
+                    title="以目前的 AI 引擎對同一張影像重跑辨識,不需重新拍照">
+                ↻ 重新辨識
+            </button>
+        </form>
+        <a asp-action="Index" class="btn btn-outline-secondary btn-sm">回佇列</a>
+    </div>
+</div>
+
+@* 「重新辨識」結果訊息由 _Layout 統一顯示 TempData["Message"],此處不重複輸出 *@
+
+@* 模擬引擎的結果是寫死的樣張資料,與這張照片無關。此警示必須醒目,
+   否則假資料會被當成辨識結果覆核送進傷患主檔。 *@
+@if (Model.IsMockResult)
+{
+    <div class="alert alert-danger py-2 mb-2">
+        <b>⚠ 本結果來自模擬引擎,不是這張照片的辨識內容。</b>
+        欄位為固定樣張假資料(陳○宏)。請先將 AI 服務切換為真實引擎,再按上方
+        <b>「↻ 重新辨識」</b>。
+        <div class="small mt-1">
+            切換方式:啟動 AI 服務時設定 <code>DMAT_ENGINE=vision</code>(vLLM/llama.cpp)或
+            <code>DMAT_ENGINE=chandra_hf</code>(本機推論)— 見 <code>docs/AI服務使用說明.md</code>。
+        </div>
+    </div>
+}
+
+@if (Model.IsAnalyzing)
+{
+    <div class="alert alert-info py-2 d-flex align-items-center gap-2" id="analyzingBanner">
+        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        <span>AI 辨識進行中,完成後本頁會自動更新。下方欄位為前一次的結果(若有)。</span>
+    </div>
+}
+
+@if (Model.IsManualFallback)
+{
+    <div class="alert alert-warning py-2">
+        AI 服務降級,本單為<b>人工輸入模式</b>,請對照影像逐欄填寫。
+        排除問題後可按<b>「↻ 重新辨識」</b>重試。
+    </div>
+}
+else if (!Model.IsMockResult)
+{
+    <p class="text-muted small mb-2">
+        模型:@Model.ModelName;已辨識 @Model.RecognisedCount 欄,待確認 @Model.NeedReviewCount 欄;
+        <span class="badge bg-warning text-dark">黃色</span> 欄位為信心不足,請優先確認。
+    </p>
+}
+
+@if (Model.OcrHealth is { } health && !health.Reachable)
+{
+    <div class="alert alert-secondary py-2 mb-2 small">
+        目前無法連線至 AI 辨識服務,「重新辨識」會失敗。請先確認 AI 服務(埠 8100)已啟動。
+    </div>
+}
+else if (Model.OcrHealth is { Reachable: true, IsMock: false, EngineReady: false } h2)
+{
+    <div class="alert alert-secondary py-2 mb-2 small">
+        AI 服務已啟動,但推論後端尚未就緒(@h2.Engine)。模型可能還在載入,稍候再試。
+    </div>
+}
+
+@foreach (var w in Model.Warnings)
+{
+    <div class="alert alert-danger py-2 mb-2">⚠ @w</div>
+}
+
+@* data-guard-enter:阻擋瀏覽器的「隱含送出」——
+   在文字欄位按 Enter 預設會直接送出整張表單,等於在還沒看完所有欄位時
+   就把資料寫進傷患主檔。覆核是不可逆的動作,必須由使用者明確按下按鈕。 *@
+<form method="post" asp-action="Confirm" asp-route-id="@Model.ImageId" data-guard-enter>
+    @Html.AntiForgeryToken()
+    <div class="row g-3">
+        <div class="col-12 col-lg-6">
+            <div class="sticky-lg-top" style="top:1rem">
+                <div class="card">
+                    <div class="card-header py-2">原始紀錄單影像(點擊放大)</div>
+                    <a href="@Url.Action("Image", "Capture", new { id = Model.ImageId })" target="_blank">
+                        <img src="@Url.Action("Image", "Capture", new { id = Model.ImageId })"
+                             class="img-fluid" alt="紀錄單影像" />
+                    </a>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-lg-6">
+            @foreach (var group in Model.Groups)
+            {
+                var isDiagnosis = group.Key is FieldCatalog.GroupTrauma or FieldCatalog.GroupNonTrauma;
+                <div class="card mb-3">
+                    <div class="card-header py-2 fw-bold">@group.Key</div>
+                    <div class="card-body py-3">
+                        <div class="row g-2">
+                            @foreach (var f in group)
+                            {
+                                var highlight = f.NeedReview ? "field-need-review" : "";
+                                if (f.Def.Kind == FieldKind.Checkbox)
+                                {
+                                    <div class="@(isDiagnosis ? "col-6 col-xl-4" : "col-6") @highlight rounded">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" value="true"
+                                                   name="f_@f.Def.Key" id="f_@f.Def.Key" checked="@f.Checked" />
+                                            <label class="form-check-label" for="f_@f.Def.Key">@f.Def.Label</label>
+                                            @Html.Raw(ConfBadge(f))
+                                        </div>
+                                    </div>
+                                }
+                                else if (f.Def.Kind == FieldKind.Select)
+                                {
+                                    <div class="col-12 col-sm-6 @highlight rounded p-1">
+                                        <label class="form-label small mb-0" for="f_@f.Def.Key">@f.Def.Label @Html.Raw(ConfBadge(f))</label>
+                                        <select class="form-select" name="f_@f.Def.Key" id="f_@f.Def.Key">
+                                            <option value="">(未填)</option>
+                                            @foreach (var opt in f.Def.Options ?? [])
+                                            {
+                                                var label = f.Def.Key == OcrFieldKeys.Triage ? triageLabels[opt] : opt;
+                                                <option value="@opt" selected="@(opt == f.Value)">@label</option>
+                                            }
+                                        </select>
+                                    </div>
+                                }
+                                else if (f.Def.Kind == FieldKind.Textarea)
+                                {
+                                    <div class="col-12 @highlight rounded p-1">
+                                        <label class="form-label small mb-0" for="f_@f.Def.Key">@f.Def.Label @Html.Raw(ConfBadge(f))</label>
+                                        <textarea class="form-control" rows="3" name="f_@f.Def.Key" id="f_@f.Def.Key">@f.Value</textarea>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="col-6 col-sm-4 @highlight rounded p-1">
+                                        <label class="form-label small mb-0" for="f_@f.Def.Key">@f.Def.Label @Html.Raw(ConfBadge(f))</label>
+                                        <input class="form-control" type="@(f.Def.Kind == FieldKind.Number ? "number" : "text")"
+                                               step="any" name="f_@f.Def.Key" id="f_@f.Def.Key" value="@f.Value" />
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+            <div class="d-grid gap-2 mb-4">
+                <button type="submit" class="btn btn-danger btn-lg">確認無誤,寫入傷患資料</button>
+                <div class="form-text text-center">
+                    按 Enter 不會送出,請確認所有欄位後點上方按鈕。
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+@section Scripts {
+    <script>
+        // 辨識進行中時定時重整,讓背景完成的結果自動出現(不必手動刷新)
+        if (document.getElementById('analyzingBanner')) {
+            setTimeout(function () { location.reload(); }, 8000);
+        }
+
+        // 阻擋表單的「隱含送出」(implicit submission)。
+        //
+        // 瀏覽器預設:在單行輸入框按 Enter 就等同按下表單的第一個 submit 按鈕。
+        // 覆核送出會把資料寫進傷患主檔並新增檢傷紀錄,是不可逆的 —— 現場一邊看影像
+        // 一邊打字時很容易誤按,因此改為只有明確操作按鈕才送出。
+        //
+        // 刻意保留的例外:
+        //   textarea  —— Enter 是換行,本來就不會觸發隱含送出(現病史需要多行)
+        //   button    —— 使用者已把焦點移到按鈕才按 Enter,那是明確的操作意圖,
+        //                也是鍵盤使用者按下按鈕的正常方式,不該擋
+        document.querySelectorAll('form[data-guard-enter]').forEach(function (form) {
+            form.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter') return;
+                var t = e.target;
+                if (!t || !t.tagName) return;
+                var tag = t.tagName.toUpperCase();
+                if (tag === 'TEXTAREA') return;
+                if (tag === 'BUTTON' || (tag === 'INPUT' && (t.type === 'submit' || t.type === 'button'))) return;
+                e.preventDefault();
+            });
+        });
+    </script>
+}

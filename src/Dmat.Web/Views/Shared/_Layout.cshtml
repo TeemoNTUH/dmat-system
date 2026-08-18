@@ -1,0 +1,65 @@
+@using Dmat.Web.Models.Entities
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#b02a37" />
+    <title>@ViewData["Title"] - DMAT 災難醫療平台</title>
+    <link rel="manifest" href="~/manifest.webmanifest" />
+    @* 全部前端資產本地供應,不依賴外部 CDN(架構書 3.4) *@
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body class="bg-light">
+@if (User.Identity?.IsAuthenticated == true)
+{
+    <nav class="navbar navbar-expand-md navbar-dark bg-danger mb-3">
+        <div class="container-fluid">
+            <a class="navbar-brand fw-bold" asp-controller="Dashboard" asp-action="Index">🚑 DMAT</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="mainNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" asp-controller="Dashboard" asp-action="Index">儀表板</a></li>
+                    @if (User.IsInRole(RoleNames.Medic) || User.IsInRole(RoleNames.StationLeader) || User.IsInRole(RoleNames.Admin))
+                    {
+                        <li class="nav-item"><a class="nav-link" asp-controller="Capture" asp-action="Index">拍攝紀錄單</a></li>
+                        <li class="nav-item"><a class="nav-link" asp-controller="Review" asp-action="Index">覆核佇列</a></li>
+                    }
+                    <li class="nav-item"><a class="nav-link" asp-controller="Patients" asp-action="Index">傷患清單</a></li>
+                </ul>
+                <span class="navbar-text me-3 text-white">@User.Identity.Name</span>
+                <form asp-controller="Account" asp-action="Logout" method="post" class="d-inline">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="btn btn-outline-light btn-sm">登出</button>
+                </form>
+            </div>
+        </div>
+    </nav>
+}
+<main class="container-fluid px-3">
+    @if (TempData["Message"] is string msg)
+    {
+        <div class="alert alert-info alert-dismissible fade show">
+            @msg
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    }
+    @RenderBody()
+</main>
+<footer class="text-center text-muted small py-3">
+    DMAT 災難醫療 AI 資訊整合與動態指揮暨決策輔助智慧平台(核心切片)
+</footer>
+<script src="~/lib/jquery/dist/jquery.min.js"></script>
+<script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // PWA:離線快取與影像離線佇列(架構書 7.4.1)
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js');
+    }
+</script>
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

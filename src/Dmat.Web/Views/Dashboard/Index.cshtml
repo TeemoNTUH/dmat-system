@@ -1,0 +1,237 @@
+@using Dmat.Web.Models.Entities
+@using Dmat.Web.Services
+@model DashboardSummary
+@{
+    ViewData["Title"] = "儀表板";
+    var recent = (List<Patient>)ViewBag.Recent;
+    // 刪除病歷是不可逆操作,僅系統管理者可見可用(架構書 8.2)
+    var canDelete = User.IsInRole(RoleNames.Admin);
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0">傷情態勢儀表板</h4>
+    <span class="small text-muted">
+        連線狀態:<span id="connState" class="badge bg-secondary">連線中…</span>
+        更新於 <span id="updatedAt">@Model.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+    </span>
+</div>
+
+@*
+    大量傷患醫療應變戰情看板。
+    版面依提供的白色版模板,色票沿用本站檢傷變數以與下方儀表板一致。
+    所有數值皆取自資料庫即時統計,並隨 SignalR 推播更新(見 dashboard.js)。
+*@
+@{
+    // 長條寬度 = 該類別人數 ÷ 總收治人數。四條加起來剛好是 100%,
+    // 因此長條長度可直接讀成「佔全體傷患的比例」。
+    var inv = System.Globalization.CultureInfo.InvariantCulture;
+    var triageTotal = Math.Max(1, Model.Total);   // 尚無傷患時避免除以零,四條皆為 0%
+    // 長條只表達比例,實際人數由右側欄位顯示。
+    string W(int n) => (n * 100.0 / triageTotal).ToString("0.#", inv);
+}
+<div class="card mb-3">
+    <div class="card-header py-2 fw-bold d-flex justify-content-between align-items-center">
+        <span>大量傷患醫療應變戰情看板</span>
+        <span class="small text-muted fw-normal">數值即時取自傷患主檔</span>
+    </div>
+    <div class="card-body">
+        <div class="row g-2 mb-3 text-center">
+            <div class="col-6 col-md-3">
+                <div class="card h-100 bg-light border-0"><div class="card-body py-3">
+                    <div class="small text-muted">總收治病患人數</div>
+                    <div class="fs-3 fw-bold" id="boardTotal">@Model.Total</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card h-100 bg-light border-0"><div class="card-body py-3">
+                    <div class="small text-muted">男</div>
+                    <div class="fs-3 fw-bold" id="boardMale">@Model.Male</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card h-100 bg-light border-0"><div class="card-body py-3">
+                    <div class="small text-muted">女</div>
+                    <div class="fs-3 fw-bold" id="boardFemale">@Model.Female</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="card h-100 bg-light border-0"><div class="card-body py-3">
+                    <div class="small text-muted">其他／未填</div>
+                    <div class="fs-3 fw-bold" id="boardOther">@(Model.OtherGender + Model.UnknownGender)</div>
+                </div></div>
+            </div>
+        </div>
+
+        <div class="row g-3">
+            @* 左欄:檢傷分類長條(拉長填滿整欄高度)
+               右欄:病患動向與處置狀態 → 直接災難相關比例(皆為直立堆疊) *@
+            <div class="col-12 col-lg-6">
+                <div class="card bg-light h-100">
+                    @* h-100 + flex-column + space-between:長條在垂直方向平均分佈,
+                       把整欄高度撐滿,不會在下方留一大塊空白。 *@
+                    <div class="card-body d-flex flex-column">
+                        <div class="board-section-title">檢傷分類即時分佈</div>
+                        <div class="d-flex flex-column justify-content-around flex-grow-1">
+                            <div class="board-bar-row">
+                                <div class="board-bar-name">1 復甦急救</div>
+                                <div class="board-bar-track"><div class="board-bar-fill triage-1" id="barRed" style="width:@W(Model.Red)%"></div></div>
+                                <div class="board-bar-count"><span id="cntRed">@Model.Red</span>人</div>
+                            </div>
+                            <div class="board-bar-row">
+                                <div class="board-bar-name">2 緊急</div>
+                                <div class="board-bar-track"><div class="board-bar-fill triage-2" id="barYellow" style="width:@W(Model.Yellow)%"></div></div>
+                                <div class="board-bar-count"><span id="cntYellow">@Model.Yellow</span>人</div>
+                            </div>
+                            <div class="board-bar-row">
+                                <div class="board-bar-name">3 非緊急</div>
+                                <div class="board-bar-track"><div class="board-bar-fill triage-3" id="barGreen" style="width:@W(Model.Green)%"></div></div>
+                                <div class="board-bar-count"><span id="cntGreen">@Model.Green</span>人</div>
+                            </div>
+                            <div class="board-bar-row">
+                                <div class="board-bar-name">4 死亡/緩和</div>
+                                <div class="board-bar-track"><div class="board-bar-fill triage-4" id="barBlack" style="width:@W(Model.BlackOrPalliative)%"></div></div>
+                                <div class="board-bar-count"><span id="cntBlack">@Model.BlackOrPalliative</span>人</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-lg-6">
+                <div class="d-flex flex-column gap-3 h-100">
+                    <div class="card bg-light">
+                        <div class="card-body">
+                            <div class="board-section-title">病患動向與處置狀態</div>
+                            @* 四張卡直立堆疊。卡內採「標籤左、數值右」——
+                               全寬卡片用置中大數字會浪費橫向空間,橫排讀起來也更快。
+                               「處置中」藍色強調(還在站內、佔用資源的人數),「死亡」用檢傷黑。 *@
+                            <div class="d-flex flex-column gap-2">
+                                <div class="card stat-card">
+                                    <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center">
+                                        <span style="font-size:.85rem">返家</span>
+                                        <span class="fs-5 fw-bold lh-1" id="boardDeparted">@Model.Departed</span>
+                                    </div>
+                                </div>
+                                <div class="card stat-card">
+                                    <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center">
+                                        <span style="font-size:.85rem">後送</span>
+                                        <span class="fs-5 fw-bold lh-1" id="boardEvac">@Model.Evacuation</span>
+                                    </div>
+                                </div>
+                                <div class="card stat-card triage-bg-4">
+                                    <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center">
+                                        <span style="font-size:.85rem">死亡</span>
+                                        <span class="fs-5 fw-bold lh-1" id="boardDeceased">@Model.Deceased</span>
+                                    </div>
+                                </div>
+                                <div class="card stat-card border-primary text-primary">
+                                    <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center">
+                                        <span style="font-size:.85rem">處置中</span>
+                                        <span class="fs-5 fw-bold lh-1" id="boardInCare">@Model.InCare</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card bg-light">
+                        <div class="card-body">
+                            <div class="board-section-title">直接災難相關比例</div>
+                            @* 版面已就緒,資料待接。
+                               Patient 尚無「災難相關性」欄位,因此顯示「—」而非 0 ——
+                               0 會讓人以為統計後確實是零人,那是假資訊。
+                               DashboardService 的 DisasterDirect/Indirect/Unrelated 一旦填入數值,
+                               這三張卡與 SignalR 推播就會自動開始顯示,不需要再改前端。 *@
+                            <div class="board-status-item">
+                                <span>直接</span>
+                                <span class="num" id="boardDisasterDirect">@(Model.DisasterDirect?.ToString() ?? "—")</span>
+                            </div>
+                            <div class="board-status-item">
+                                <span>間接</span>
+                                <span class="num" id="boardDisasterIndirect">@(Model.DisasterIndirect?.ToString() ?? "—")</span>
+                            </div>
+                            <div class="board-status-item">
+                                <span>無相關</span>
+                                <span class="num" id="boardDisasterUnrelated">@(Model.DisasterUnrelated?.ToString() ?? "—")</span>
+                            </div>
+                            @if (!Model.HasDisasterRelation)
+                            {
+                                <div class="small text-muted mt-2" id="boardDisasterNote">
+                                    欄位尚未建立,資料接上後即自動顯示。
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="alert alert-danger py-2 mt-3 mb-0">
+            <div class="fw-bold small mb-1">⚠ 指定回報項目／特殊通報警示</div>
+            <div class="small" id="boardAlerts">@string.Join(" | ", Model.Alerts)</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-2 mb-3 text-center">
+    <div class="col-6 col-md-2"><div class="card stat-card"><div class="card-body py-3"><div class="fs-2 fw-bold" id="statTotal">@Model.Total</div><div class="small">傷患總數</div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card stat-card triage-bg-1"><div class="card-body py-3"><div class="fs-2 fw-bold" id="statRed">@Model.Red</div><div class="small">紅・復甦急救</div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card stat-card triage-bg-2"><div class="card-body py-3"><div class="fs-2 fw-bold" id="statYellow">@Model.Yellow</div><div class="small">黃・緊急</div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card stat-card triage-bg-3"><div class="card-body py-3"><div class="fs-2 fw-bold" id="statGreen">@Model.Green</div><div class="small">綠・非緊急</div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card stat-card triage-bg-4"><div class="card-body py-3"><div class="fs-2 fw-bold" id="statBlack">@Model.Black</div><div class="small">黑・死亡</div></div></div></div>
+    <div class="col-6 col-md-2"><div class="card stat-card triage-bg-5"><div class="card-body py-3"><div class="fs-2 fw-bold" id="statPalliative">@Model.Palliative</div><div class="small">緩和治療</div></div></div></div>
+</div>
+
+<div class="row g-2 mb-3 text-center">
+    <div class="col-4"><div class="card"><div class="card-body py-2"><div class="fs-4 fw-bold" id="statInCare">@Model.InCare</div><div class="small text-muted">收治中</div></div></div></div>
+    <div class="col-4"><div class="card"><div class="card-body py-2"><div class="fs-4 fw-bold" id="statAwaiting">@Model.AwaitingEvacuation</div><div class="small text-muted">待後送</div></div></div></div>
+    <div class="col-4"><div class="card"><div class="card-body py-2"><div class="fs-4 fw-bold" id="statPending">@Model.PendingReview</div><div class="small text-muted">待覆核影像</div></div></div></div>
+</div>
+
+<div class="card">
+    <div class="card-header py-2 fw-bold">最近傷患</div>
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>檢傷</th><th>傷票編號</th><th>姓名</th><th>狀態</th><th>更新</th>
+                    @if (canDelete) { <th class="text-end">操作</th> }
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var p in recent)
+            {
+                var detailUrl = Url.Action("Detail", "Patients", new { id = p.PatientId });
+                <tr style="cursor:pointer" onclick="location='@detailUrl'">
+                    <td><span class="triage-badge triage-@((byte)p.CurrentTriage)">@((byte)p.CurrentTriage switch { 1 => "紅", 2 => "黃", 3 => "綠", 4 => "黑", 5 => "緩", _ => "?" })</span></td>
+                    <td class="fw-bold">@p.TagNo</td>
+                    <td>@(p.Name ?? "(無名氏)")</td>
+                    <td>@(p.Status switch { PatientStatus.InCare => "收治中", PatientStatus.AwaitingEvacuation => "待後送", PatientStatus.Evacuating => "後送中", PatientStatus.Departed => "離站", PatientStatus.Deceased => "死亡", _ => "?" })</td>
+                    <td class="small text-muted">@p.UpdatedAt.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                    @if (canDelete)
+                    {
+                        @* 整列可點擊進入明細,刪除按鈕必須 stopPropagation,否則會同時觸發跳頁 *@
+                        <td class="text-end" onclick="event.stopPropagation()">
+                            <form method="post"
+                                  asp-controller="Patients" asp-action="Delete"
+                                  asp-route-id="@p.PatientId"
+                                  asp-route-returnUrl="@Url.Action("Index", "Dashboard")"
+                                  class="d-inline js-delete-patient"
+                                  data-tag="@(p.TagNo ?? "(無編號)")"
+                                  data-name="@(p.Name ?? "無名氏")">
+                                @Html.AntiForgeryToken()
+                                <button type="submit" class="btn btn-outline-danger btn-sm py-0"
+                                        title="刪除此傷患的所有資料,含原始紀錄單影像">刪除</button>
+                            </form>
+                        </td>
+                    }
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/lib/signalr/signalr.min.js"></script>
+    <script src="~/js/dashboard.js" asp-append-version="true"></script>
+}

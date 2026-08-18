@@ -1,0 +1,70 @@
+@using Dmat.Web.Services.Ocr
+@{
+    ViewData["Title"] = "拍攝紀錄單";
+    var health = ViewBag.OcrHealth as OcrHealth;
+}
+<h4 class="mb-3">拍攝/上傳 紙本醫療救護紀錄單</h4>
+
+@* AI 引擎狀態必須在拍攝前就看得到 —— 用模擬引擎拍一整批照片,
+   結果全是同一份樣張假資料,是最容易白做工的情況。 *@
+@if (health is { Reachable: false })
+{
+    <div class="alert alert-warning py-2">
+        <b>無法連線至 AI 辨識服務。</b>影像仍會存檔,但不會辨識(自動降級為人工輸入模式)。
+        請確認 AI 服務已於埠 8100 啟動。
+    </div>
+}
+else if (health is { IsMock: true })
+{
+    <div class="alert alert-danger py-2">
+        <b>⚠ 目前為模擬引擎:拍照後得到的是固定樣張假資料(陳○宏),不是你拍的內容。</b>
+        <div class="small mt-1">
+            要真的辨識照片,請以真實引擎重啟 AI 服務:
+            <code>DMAT_ENGINE=vision</code>(vLLM / llama.cpp)或
+            <code>DMAT_ENGINE=chandra_hf</code>(本機推論)。
+            已上傳的照片可在覆核頁按「↻ 重新辨識」重跑,不必重拍。
+        </div>
+    </div>
+}
+else if (health is { EngineReady: false })
+{
+    <div class="alert alert-warning py-2 small">
+        AI 服務已啟動,但推論後端尚未就緒(@health.Engine)。模型可能仍在載入,此時上傳會降級為人工輸入。
+    </div>
+}
+else if (health is not null)
+{
+    <p class="small text-success mb-3">✔ AI 辨識引擎已就緒:@health.Engine</p>
+}
+<div class="row">
+    <div class="col-12 col-md-6">
+        <div class="card mb-3">
+            <div class="card-body text-center">
+                @* capture="environment" 於 Android 直接開啟後鏡頭 *@
+                <input id="fileInput" type="file" accept="image/*" capture="environment" class="d-none" multiple />
+                <button id="btnCapture" class="btn btn-danger btn-lg w-100 py-4 mb-2">
+                    📷 拍攝紀錄單
+                </button>
+                <p class="text-muted small mb-0">
+                    離線時影像先存於裝置佇列,連上區網後自動補傳(離線優先設計)。
+                </p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">上傳佇列</div>
+            <ul id="queueList" class="list-group list-group-flush">
+                <li class="list-group-item text-muted" id="queueEmpty">目前沒有待傳影像</li>
+            </ul>
+        </div>
+    </div>
+    <div class="col-12 col-md-6">
+        <div class="card">
+            <div class="card-header">最近上傳結果</div>
+            <ul id="resultList" class="list-group list-group-flush"></ul>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/capture.js" asp-append-version="true"></script>
+}

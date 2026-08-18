@@ -1,0 +1,312 @@
+@using Dmat.Web.Models.Entities
+@using Dmat.Web.Services
+@model Patient
+@{
+    ViewData["Title"] = "傷患資料";
+    // 指揮官看的是全站態勢、不在床邊,故不提供個別傷患的改動(與控制器的 CareRoles 一致)
+    var canCare = User.IsInRole(RoleNames.Medic) || User.IsInRole(RoleNames.StationLeader)
+                  || User.IsInRole(RoleNames.Admin);
+    var latest = Model.TriageRecords.FirstOrDefault();
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0">
+        <span class="triage-badge triage-@((byte)Model.CurrentTriage)">@((byte)Model.CurrentTriage switch { 1 => "紅", 2 => "黃", 3 => "綠", 4 => "黑", 5 => "緩", _ => "?" })</span>
+        @(Model.Name ?? "(無名氏)")
+        <span class="text-muted fs-6">傷票 @Model.TagNo</span>
+    </h4>
+    <a asp-action="Index" class="btn btn-outline-secondary btn-sm">回清單</a>
+</div>
+
+@if (canCare)
+{
+    @* 動向切換。刻意用一整排大按鈕而非「下拉選單 + 送出」:
+       現場常戴手套單手操作,兩段式操作既慢又容易誤選。
+       目前狀態以實心按鈕標示,一眼就知道現在在哪一段。 *@
+    <div class="card mb-3">
+        <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2">
+            <span class="fw-bold me-1">動向</span>
+            @foreach (var s in Enum.GetValues<PatientStatus>())
+            {
+                var current = Model.Status == s;
+                var deceased = s == PatientStatus.Deceased;
+                // 樣式與確認旗標先算好再套用。屬性值裡放跨行三元或巢狀引號,
+                // 是 Razor 剖析最容易出錯的寫法,拆成變數既安全也好讀。
+                var btnClass = (current, deceased) switch
+                {
+                    (true, true) => "btn-dark",
+                    (true, false) => "btn-primary",
+                    (false, true) => "btn-outline-dark",
+                    (false, false) => "btn-outline-primary",
+                };
+                var needConfirm = deceased && !current ? "true" : null;
+                <form method="post" asp-action="UpdateStatus" asp-route-id="@Model.PatientId" class="m-0">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="status" value="@((byte)s)" />
+                    <button type="submit" disabled="@current" class="btn btn-lg @btnClass"
+                            data-confirm-deceased="@needConfirm">
+                        @PatientCareService.StatusLabel(s)
+                    </button>
+                </form>
+            }
+            <span class="text-muted small ms-auto">目前:@PatientCareService.StatusLabel(Model.Status)</span>
+        </div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <button class="btn btn-outline-secondary" type="button"
+                data-bs-toggle="collapse" data-bs-target="#retriagePanel">↻ 重新檢傷</button>
+        <button class="btn btn-outline-secondary" type="button"
+                data-bs-toggle="collapse" data-bs-target="#editPanel">✎ 修正基本資料</button>
+    </div>
+
+    @* --- 重新檢傷 ------------------------------------------------------
+       病情在站內惡化或好轉時就地重新檢傷,不必重填紙本再拍一次。
+       生命徵象預填上一筆的值:複檢通常只有一兩項改變,全部重打既慢又容易出錯。 *@
+    <div class="collapse mb-3" id="retriagePanel">
+        <form method="post" asp-action="Retriage" asp-route-id="@Model.PatientId" class="card card-body">
+            @Html.AntiForgeryToken()
+            <div class="fw-bold mb-2">重新檢傷(新增一筆紀錄,舊紀錄保留)</div>
+            <div class="row g-2">
+                <div class="col-12 col-md-4">
+                    <label class="form-label small mb-1" for="level">檢傷分類</label>
+                    <select class="form-select form-select-lg" id="level" name="level" required>
+                        @foreach (var t in Enum.GetValues<TriageLevel>())
+                        {
+                            <option value="@((byte)t)" selected="@(Model.CurrentTriage == t)">@PatientCareService.TriageName(t)</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-6 col-md-4">
+                    <label class="form-label small mb-1" for="consciousness">意識</label>
+                    <input class="form-control" id="consciousness" name="consciousness"
+                           value="@latest?.Consciousness" placeholder="如 15(E4V5M6) 或 清" />
+                </div>
+                <div class="col-6 col-md-4">
+                    <label class="form-label small mb-1" for="temp">體溫 ℃</label>
+                    <input class="form-control" id="temp" name="temp" type="number" step="0.1" value="@latest?.Temp" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="sbp">收縮壓</label>
+                    <input class="form-control" id="sbp" name="sbp" type="number" value="@latest?.Sbp" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="dbp">舒張壓</label>
+                    <input class="form-control" id="dbp" name="dbp" type="number" value="@latest?.Dbp" />
+                </div>
+                <div class="col-4 col-md-2">
+                    <label class="form-label small mb-1" for="hr">脈搏</label>
+                    <input class="form-control" id="hr" name="hr" type="number" value="@latest?.Hr" />
+                </div>
+                <div class="col-4 col-md-2">
+                    <label class="form-label small mb-1" for="rr">呼吸</label>
+                    <input class="form-control" id="rr" name="rr" type="number" value="@latest?.Rr" />
+                </div>
+                <div class="col-4 col-md-2">
+                    <label class="form-label small mb-1" for="spO2">血氧 %</label>
+                    <input class="form-control" id="spO2" name="spO2" type="number" value="@latest?.SpO2" />
+                </div>
+            </div>
+            <div class="d-grid d-md-block mt-3">
+                <button type="submit" class="btn btn-danger btn-lg">新增檢傷紀錄</button>
+                <span class="form-text ms-md-2">生命徵象已預填上一筆的值,只需改動有變化的欄位。</span>
+            </div>
+        </form>
+    </div>
+
+    @* --- 修正基本資料 -------------------------------------------------- *@
+    <div class="collapse mb-3" id="editPanel">
+        <form method="post" asp-action="Edit" asp-route-id="@Model.PatientId" class="card card-body">
+            @Html.AntiForgeryToken()
+            <div class="fw-bold mb-2">修正基本資料</div>
+            <div class="row g-2">
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="tagNo">傷票編號</label>
+                    <input class="form-control" id="tagNo" name="tagNo" value="@Model.TagNo" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="name">姓名</label>
+                    <input class="form-control" id="name" name="name" value="@Model.Name" />
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small mb-1" for="gender">性別</label>
+                    <select class="form-select" id="gender" name="gender">
+                        <option value="">—</option>
+                        <option value="1" selected="@(Model.Gender == Gender.Male)">男</option>
+                        <option value="2" selected="@(Model.Gender == Gender.Female)">女</option>
+                        <option value="3" selected="@(Model.Gender == Gender.Other)">其他</option>
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small mb-1" for="estAge">年齡</label>
+                    <input class="form-control" id="estAge" name="estAge" type="number" value="@Model.EstAge" />
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small mb-1" for="birthDate">生日</label>
+                    <input class="form-control" id="birthDate" name="birthDate" type="date"
+                           value="@Model.BirthDate?.ToString("yyyy-MM-dd")" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="nationality">國籍</label>
+                    <input class="form-control" id="nationality" name="nationality" value="@Model.Nationality" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="nationalId">身分證字號</label>
+                    <input class="form-control" id="nationalId" name="nationalId" placeholder="留空=不變更" />
+                </div>
+                <div class="col-12">
+                    <label class="form-label small mb-1" for="presentIllness">現病史</label>
+                    <textarea class="form-control" id="presentIllness" name="presentIllness" rows="2">@Model.PresentIllness</textarea>
+                </div>
+            </div>
+            <div class="d-grid d-md-block mt-3">
+                <button type="submit" class="btn btn-primary btn-lg">儲存修正</button>
+                <span class="form-text ms-md-2">
+                    身分證字號為加密欄位,<b>留空代表不變更</b>;要清空請填入單一個「-」。
+                    所有修改都會寫入稽核紀錄。
+                </span>
+            </div>
+        </form>
+    </div>
+}
+
+<div class="row g-3">
+    <div class="col-12 col-md-6">
+        <div class="card mb-3">
+            <div class="card-header py-2 fw-bold">基本資料</div>
+            <div class="card-body py-2">
+                <dl class="row mb-0">
+                    <dt class="col-4">動向</dt><dd class="col-8">@PatientCareService.StatusLabel(Model.Status)</dd>
+                    <dt class="col-4">性別</dt><dd class="col-8">@(Model.Gender switch { Gender.Male => "男", Gender.Female => "女", Gender.Other => "其他", _ => "—" })</dd>
+                    <dt class="col-4">年齡</dt><dd class="col-8">@(Model.EstAge?.ToString() ?? "—")</dd>
+                    <dt class="col-4">生日</dt><dd class="col-8">@(Model.BirthDate?.ToString("yyyy/MM/dd") ?? "—")</dd>
+                    <dt class="col-4">身分證字號</dt><dd class="col-8">@(ViewBag.MaskedNationalId ?? "—")<span class="text-muted small">(遮罩顯示)</span></dd>
+                    <dt class="col-4">國籍</dt><dd class="col-8">@(Model.Nationality ?? "本國")</dd>
+                    <dt class="col-4">現病史</dt><dd class="col-8">@(Model.PresentIllness ?? "—")</dd>
+                </dl>
+            </div>
+        </div>
+        @if (Model.PastHistory is { } h)
+        {
+            var chronic = new List<string>();
+            if (h.ChronicDiabetes) { chronic.Add("糖尿病"); }
+            if (h.ChronicHypertension) { chronic.Add("高血壓"); }
+            if (h.ChronicDialysis) { chronic.Add("長期透析"); }
+            if (h.ChronicHeartFailure) { chronic.Add("心衰竭"); }
+            if (h.ChronicAsthma) { chronic.Add("氣喘"); }
+            if (h.ChronicCopd) { chronic.Add("COPD"); }
+            if (h.ChronicOther) { chronic.Add($"其他 {h.ChronicOtherNote}"); }
+            <div class="card mb-3">
+                <div class="card-header py-2 fw-bold">過去重要病史</div>
+                <div class="card-body py-2">
+                    <dl class="row mb-0">
+                        <dt class="col-4">懷孕</dt><dd class="col-8">@(h.Pregnant == true ? "是" : "—")</dd>
+                        <dt class="col-4">疫苗接種</dt>
+                        <dd class="col-8">@(h.VaccineTetanus ? "破傷風 " : "")@(h.VaccineOther ? $"其他 {h.VaccineOtherNote}" : "")@(!h.VaccineTetanus && !h.VaccineOther ? "—" : "")</dd>
+                        <dt class="col-4">過敏史</dt><dd class="col-8">@(h.HasAllergy == true ? $"有 {h.AllergyNote}" : "無")</dd>
+                        <dt class="col-4">慢性疾病</dt><dd class="col-8">@(chronic.Count > 0 ? string.Join("、", chronic) : "無")</dd>
+                    </dl>
+                </div>
+            </div>
+        }
+        <div class="card mb-3">
+            <div class="card-header py-2 fw-bold">主要初步診斷</div>
+            <div class="card-body py-2">
+                @if (Model.Diagnoses.Count == 0)
+                {
+                    <span class="text-muted">無</span>
+                }
+                else
+                {
+                    foreach (var d in Model.Diagnoses)
+                    {
+                        <span class="badge @(d.DiagnosisCode!.Category == 1 ? "bg-danger" : "bg-primary") me-1 mb-1">
+                            @(d.DiagnosisCode.Category == 1 ? "創傷" : "非創傷")・@d.DiagnosisCode.NameZh@(d.Note is not null ? $"({d.Note})" : "")
+                        </span>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6">
+        <div class="card mb-3">
+            <div class="card-header py-2 fw-bold">檢傷紀錄歷程</div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead><tr><th>時間</th><th>分類</th><th>意識</th><th>體溫</th><th>脈搏</th><th>呼吸</th><th>血壓</th><th>血氧</th></tr></thead>
+                    <tbody>
+                    @foreach (var t in Model.TriageRecords)
+                    {
+                        <tr>
+                            <td class="small">@t.TriagedAt.ToLocalTime().ToString("MM/dd HH:mm")</td>
+                            <td><span class="triage-badge triage-@((byte)t.Level)">@((byte)t.Level switch { 1 => "紅", 2 => "黃", 3 => "綠", 4 => "黑", 5 => "緩", _ => "?" })</span></td>
+                            <td>@t.Consciousness</td>
+                            <td>@t.Temp</td>
+                            <td>@t.Hr</td>
+                            <td>@t.Rr</td>
+                            <td>@(t.Sbp is not null ? $"{t.Sbp}/{t.Dbp}" : "—")</td>
+                            <td>@(t.SpO2 is not null ? $"{t.SpO2}%" : "—")</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        @{
+            var missingIds = ViewBag.MissingImageIds as HashSet<Guid> ?? [];
+        }
+        <div class="card">
+            <div class="card-header py-2 fw-bold">紀錄單影像(@Model.Images.Count)</div>
+            <div class="card-body">
+                @foreach (var img in Model.Images)
+                {
+                    @if (missingIds.Contains(img.ImageId))
+                    {
+                        @* 檔案遺失時不放連結:點了只會得到 404 錯誤頁,對現場沒有幫助。
+                           改為明確標示,並附上雜湊值前綴供追查。 *@
+                        <div class="rounded border border-warning bg-light d-inline-flex flex-column
+                                    align-items-center justify-content-center text-center me-2 mb-2 p-1"
+                             style="width:6.0rem;height:6.0rem"
+                             title="資料庫有紀錄,但磁碟上找不到檔案:@img.FilePath">
+                            <span class="text-warning fs-4">⚠</span>
+                            <span class="small text-muted lh-1">影像檔<br />遺失</span>
+                            <span class="text-muted" style="font-size:.65rem">@img.FileHash[..8]…</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <a href="@Url.Action("Image", "Capture", new { id = img.ImageId })" target="_blank">
+                            <img src="@Url.Action("Image", "Capture", new { id = img.ImageId })"
+                                 class="rounded border me-2 mb-2" style="width:6.0rem;height:6.0rem;object-fit:cover"
+                                 alt="紀錄單影像 @img.FileHash[..8]" />
+                        </a>
+                    }
+                }
+                @if (missingIds.Count > 0)
+                {
+                    <div class="alert alert-warning py-2 mt-2 mb-0 small">
+                        有 @missingIds.Count 張影像的檔案在磁碟上找不到。
+                        資料庫紀錄仍在,但原始紀錄單影像已無法檢視 ——
+                        請確認 <code>app_data/images</code> 是否完整,或該檔案是否曾被手動刪除。
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        // 標記死亡會同步把檢傷分類改為黑標,並新增一筆檢傷紀錄 —— 那是臨床判定,
+        // 不該因為誤觸而發生。其餘動向切換沒有這層確認:後送、離站本來就會來回變動,
+        // 每次都要確認只會讓現場養成不看內容就按確定的習慣。
+        document.querySelectorAll('[data-confirm-deceased]').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                var ok = confirm(
+                    '確定要將此傷患標記為「死亡」嗎?\n\n' +
+                    '系統會同時把檢傷分類改為黑標,並新增一筆檢傷紀錄。\n' +
+                    '此動作會記入稽核紀錄。');
+                if (!ok) e.preventDefault();
+            });
+        });
+    </script>
+}

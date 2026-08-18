@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.8
+python-multipart>=0.0.9
+httpx>=0.27
+# 影像前處理(EXIF 轉正、縮放、對比增強)— 見 app/preprocess.py
+Pillow>=10.3
+
+# --- 本機推論(DMAT_ENGINE=chandra_hf)才需要,故不列為必要相依 -------------
+# DGX Spark / GB10 請先依 NVIDIA 指引安裝 aarch64 + CUDA 版 torch,再安裝:
+#   pip install 'chandra-ocr[hf]'
+# 使用 vLLM / llama.cpp 伺服器模式(DMAT_ENGINE=vision)則完全不需要以上套件。

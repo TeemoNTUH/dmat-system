@@ -1,0 +1,88 @@
+@using Dmat.Web.Models.Entities
+@model List<RecordImage>
+@{
+    ViewData["Title"] = "覆核佇列";
+    // 刪除影像限站長與系統管理者(見 ReviewController.DeleteImage 的說明)
+    var canDelete = User.IsInRole(RoleNames.StationLeader) || User.IsInRole(RoleNames.Admin);
+}
+<h4 class="mb-3">AI 辨識覆核佇列</h4>
+@if (Model.Count == 0)
+{
+    <div class="alert alert-success">目前沒有待覆核的紀錄單。</div>
+}
+else
+{
+    <div class="list-group">
+        @foreach (var img in Model)
+        {
+            @* 整列原本是單一 <a>,但表單不能巢狀在連結內,
+               因此改為 div 容器:左半為進入覆核的連結,右側放狀態徽章與刪除鈕。 *@
+            var inProgress = img.Status is RecordImageStatus.Queued or RecordImageStatus.Recognizing;
+            <div class="list-group-item d-flex align-items-center gap-3" data-in-progress="@(inProgress ? "true" : "false")">
+                <a asp-action="Detail" asp-route-id="@img.ImageId"
+                   class="d-flex align-items-center gap-3 flex-grow-1 text-decoration-none text-body">
+                    <img src="@Url.Action("Image", "Capture", new { id = img.ImageId })"
+                         alt="紀錄單縮圖" style="width:4.0rem;height:4.0rem;object-fit:cover" class="rounded border" />
+                    <div class="flex-grow-1">
+                        <div class="fw-bold">影像 @img.FileHash[..8]…(頁 @img.PageNo)</div>
+                        <div class="small text-muted">上傳於 @img.UploadedAt.ToLocalTime().ToString("MM/dd HH:mm")</div>
+                    </div>
+                </a>
+
+                @switch (img.Status)
+                {
+                    case RecordImageStatus.Queued:
+                        <span class="badge bg-secondary">排隊辨識中</span>
+                        break;
+                    case RecordImageStatus.Recognizing:
+                        <span class="badge bg-primary">辨識中…</span>
+                        break;
+                    case RecordImageStatus.ManualFallback:
+                        <span class="badge bg-warning text-dark">AI 降級・人工輸入</span>
+                        break;
+                    default:
+                        <span class="badge bg-info">待覆核</span>
+                        break;
+                }
+
+                @if (canDelete)
+                {
+                    <form method="post" asp-action="DeleteImage" asp-route-id="@img.ImageId"
+                          class="js-delete-image m-0"
+                          data-hash="@img.FileHash[..8]"
+                          data-uploaded="@img.UploadedAt.ToLocalTime().ToString("MM/dd HH:mm")">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn btn-outline-danger btn-sm"
+                                title="刪除這張影像與其辨識結果,含磁碟上的照片檔">刪除</button>
+                    </form>
+                }
+            </div>
+        }
+    </div>
+}
+
+@section Scripts {
+    <script>
+        // 有影像仍在辨識佇列中時定時重新整理 —— 背景辨識完成後畫面才會跟著更新。
+        // 沒有進行中的工作就不輪詢,避免現場裝置無謂耗電。
+        if (document.querySelector('[data-in-progress="true"]')) {
+            setTimeout(function () { location.reload(); }, 8000);
+        }
+
+        // 刪除影像不可復原,送出前確認。一次只刪一張,不影響佇列中其他影像。
+        document.querySelectorAll('form.js-delete-image').forEach(function (form) {
+            form.addEventListener('submit', function (e) {
+                var hash = form.dataset.hash || '';
+                var at = form.dataset.uploaded || '';
+                var ok = confirm(
+                    '確定要刪除這張影像嗎?\n\n' +
+                    '  影像:' + hash + '…\n' +
+                    '  上傳於:' + at + '\n\n' +
+                    '將一併刪除該影像的 AI 辨識結果與磁碟上的照片檔。\n' +
+                    '此操作無法復原,但只影響這一張,佇列中其他影像不受影響。'
+                );
+                if (!ok) e.preventDefault();
+            });
+        });
+    </script>
+}

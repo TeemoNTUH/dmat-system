@@ -1,0 +1,28 @@
+@model Dmat.Web.Controllers.LoginVm
+@{ ViewData["Title"] = "登入"; }
+<div class="row justify-content-center mt-5">
+    <div class="col-11 col-sm-8 col-md-5 col-lg-4">
+        <div class="card shadow">
+            <div class="card-body p-4">
+                <h3 class="text-center mb-1">🚑 DMAT</h3>
+                <p class="text-center text-muted mb-4">災難醫療資訊平台</p>
+                <div asp-validation-summary="ModelOnly" class="text-danger small"></div>
+                <form method="post" asp-action="Login">
+                    <input type="hidden" asp-for="ReturnUrl" />
+                    <div class="mb-3">
+                        <label asp-for="UserName" class="form-label">帳號</label>
+                        <input asp-for="UserName" class="form-control form-control-lg" autocomplete="username" autofocus />
+                    </div>
+                    <div class="mb-4">
+                        <label asp-for="Password" class="form-label">密碼</label>
+                        <input asp-for="Password" type="password" class="form-control form-control-lg" autocomplete="current-password" />
+                    </div>
+                    <button type="submit" class="btn btn-danger btn-lg w-100">登入</button>
+                </form>
+                <p class="text-muted small mt-3 mb-0">
+                    演練用模擬帳號:medic01 / leader01 / commander / admin(密碼見 README)
+                </p>
+            </div>
+        </div>
+    </div>
+</div>

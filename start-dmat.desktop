@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DMAT 開發環境
+Comment=啟動 AI 辨識服務與 Web 應用並開啟瀏覽器
+Exec=/home/crowdai/Code/dmat-system-20260722T064357Z-1-001/dmat-system/start-dev.sh
+Path=/home/crowdai/Code/dmat-system-20260722T064357Z-1-001/dmat-system
+Icon=utilities-terminal
+Terminal=true
+Categories=Development;
