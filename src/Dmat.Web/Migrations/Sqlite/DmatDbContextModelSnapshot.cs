@@ -333,6 +333,9 @@ namespace Dmat.Web.Migrations.Sqlite
                     b.Property<byte>("CurrentTriage")
                         .HasColumnType("INTEGER");
 
+                    b.Property<byte?>("DisasterRelation")
+                        .HasColumnType("INTEGER");
+
                     b.Property<short?>("EstAge")
                         .HasColumnType("INTEGER");
 

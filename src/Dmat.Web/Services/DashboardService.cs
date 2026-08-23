@@ -34,11 +34,9 @@ public class DashboardSummary
     /// <summary>轉院後送 = 待後送 + 後送中</summary>
     public int Evacuation => AwaitingEvacuation + Evacuating;
 
-    // ---- 直接災難相關比例(版面已就緒,資料待接) ----
-    // 刻意用 int? 而非 int:資料模型還沒有「災難相關性」欄位,
-    // 若給 0 會在看板上顯示成「經統計後確實是 0 人」,那是假資訊。
-    // null 代表「尚未收集」,前端顯示為「—」。
-    // 之後只要在此填入實際統計,看板與 SignalR 推播會自動開始顯示,不需再改前端。
+    // ---- 直接災難相關比例 ----
+    // DashboardService 一律填入實際統計(可能為 0),int? 只是延續既有的
+    // HasDisasterRelation/前端「—」判斷路徑,行為上與其他 int 欄位無異。
     public int? DisasterDirect { get; set; }
     public int? DisasterIndirect { get; set; }
     public int? DisasterUnrelated { get; set; }
@@ -88,10 +86,15 @@ public class DashboardService(DmatDbContext db)
             .GroupBy(p => p.Gender)
             .Select(g => new { Gender = g.Key, Count = g.Count() })
             .ToListAsync();
+        var byDisaster = await db.Patients
+            .GroupBy(p => p.DisasterRelation)
+            .Select(g => new { Relation = g.Key, Count = g.Count() })
+            .ToListAsync();
 
         int Triage(TriageLevel l) => byTriage.FirstOrDefault(x => x.Level == l)?.Count ?? 0;
         int Status(PatientStatus s) => byStatus.FirstOrDefault(x => x.Status == s)?.Count ?? 0;
         int Sex(Gender? g) => byGender.FirstOrDefault(x => x.Gender == g)?.Count ?? 0;
+        int Disaster(DisasterRelation r) => byDisaster.FirstOrDefault(x => x.Relation == r)?.Count ?? 0;
 
         var foreign = await db.Patients
             .CountAsync(p => p.Nationality != null && p.Nationality != "");
@@ -130,12 +133,12 @@ public class DashboardService(DmatDbContext db)
                 || i.Status == RecordImageStatus.PendingReview
                 || i.Status == RecordImageStatus.ManualFallback),
 
-            // 【待接】災難相關性(直接/間接/無相關)。
-            // Patient 尚無此欄位;欄位確認後在此改為實際 GroupBy 統計即可,例如:
-            //   DisasterDirect = await db.Patients.CountAsync(p => p.DisasterRelation == DisasterRelation.Direct),
-            DisasterDirect = null,
-            DisasterIndirect = null,
-            DisasterUnrelated = null,
+            // 災難相關性(直接/間接/無相關)。尚未評估(DisasterRelation 為 null)的傷患
+            // 不計入任何一類 —— 三個數字加起來不一定等於總收治人數,那是誠實的呈現方式,
+            // 不該為了湊滿而把未評估的人硬算進「無相關」。
+            DisasterDirect = Disaster(DisasterRelation.Direct),
+            DisasterIndirect = Disaster(DisasterRelation.Indirect),
+            DisasterUnrelated = Disaster(DisasterRelation.Unrelated),
         };
 
         summary.Alerts = BuildAlerts(summary);

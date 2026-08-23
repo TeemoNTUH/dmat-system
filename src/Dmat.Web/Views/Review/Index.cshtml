@@ -15,47 +15,58 @@ else
     <div class="list-group">
         @foreach (var img in Model)
         {
-            @* 整列原本是單一 <a>,但表單不能巢狀在連結內,
-               因此改為 div 容器:左半為進入覆核的連結,右側放狀態徽章與刪除鈕。 *@
+            @*
+                整列原本是單一 <a>,但表單不能巢狀在連結內,因此改為 div 容器:
+                左半為進入覆核的連結,右側放狀態徽章與刪除鈕。
+
+                手機版寬度不夠時的處理:容器改為可換行(flex-wrap),連結區塊給
+                min-width:0 讓文字能真的被截斷(text-truncate)而不是撐開版面 ——
+                flex 子項預設 min-width:auto,沒有這行,文字再怎麼加 text-truncate
+                都無效,長徽章文字(如「AI 降級・人工輸入」)會直接把整列推出頁面。
+                徽章與刪除鈕改成獨立一組,版面不夠時會整組換到下一行,而不是被擠出去。
+            *@
             var inProgress = img.Status is RecordImageStatus.Queued or RecordImageStatus.Recognizing;
-            <div class="list-group-item d-flex align-items-center gap-3" data-in-progress="@(inProgress ? "true" : "false")">
+            <div class="list-group-item d-flex flex-wrap align-items-center gap-2 gap-md-3" data-in-progress="@(inProgress ? "true" : "false")">
                 <a asp-action="Detail" asp-route-id="@img.ImageId"
-                   class="d-flex align-items-center gap-3 flex-grow-1 text-decoration-none text-body">
+                   class="d-flex align-items-center gap-3 text-decoration-none text-body"
+                   style="min-width:0;flex:1 1 14rem">
                     <img src="@Url.Action("Image", "Capture", new { id = img.ImageId })"
-                         alt="紀錄單縮圖" style="width:4.0rem;height:4.0rem;object-fit:cover" class="rounded border" />
-                    <div class="flex-grow-1">
-                        <div class="fw-bold">影像 @img.FileHash[..8]…(頁 @img.PageNo)</div>
-                        <div class="small text-muted">上傳於 @img.UploadedAt.ToLocalTime().ToString("MM/dd HH:mm")</div>
+                         alt="紀錄單縮圖" style="width:4.0rem;height:4.0rem;object-fit:cover;flex-shrink:0" class="rounded border" />
+                    <div class="flex-grow-1" style="min-width:0">
+                        <div class="fw-bold text-truncate">影像 @img.FileHash[..8]…(頁 @img.PageNo)</div>
+                        <div class="small text-muted text-truncate">上傳於 @img.UploadedAt.ToLocalTime().ToString("MM/dd HH:mm")</div>
                     </div>
                 </a>
 
-                @switch (img.Status)
-                {
-                    case RecordImageStatus.Queued:
-                        <span class="badge bg-secondary">排隊辨識中</span>
-                        break;
-                    case RecordImageStatus.Recognizing:
-                        <span class="badge bg-primary">辨識中…</span>
-                        break;
-                    case RecordImageStatus.ManualFallback:
-                        <span class="badge bg-warning text-dark">AI 降級・人工輸入</span>
-                        break;
-                    default:
-                        <span class="badge bg-info">待覆核</span>
-                        break;
-                }
+                <div class="d-flex align-items-center gap-2 ms-auto">
+                    @switch (img.Status)
+                    {
+                        case RecordImageStatus.Queued:
+                            <span class="badge bg-secondary">排隊辨識中</span>
+                            break;
+                        case RecordImageStatus.Recognizing:
+                            <span class="badge bg-primary">辨識中…</span>
+                            break;
+                        case RecordImageStatus.ManualFallback:
+                            <span class="badge bg-warning text-dark">AI 降級・人工輸入</span>
+                            break;
+                        default:
+                            <span class="badge bg-info">待覆核</span>
+                            break;
+                    }
 
-                @if (canDelete)
-                {
-                    <form method="post" asp-action="DeleteImage" asp-route-id="@img.ImageId"
-                          class="js-delete-image m-0"
-                          data-hash="@img.FileHash[..8]"
-                          data-uploaded="@img.UploadedAt.ToLocalTime().ToString("MM/dd HH:mm")">
-                        @Html.AntiForgeryToken()
-                        <button type="submit" class="btn btn-outline-danger btn-sm"
-                                title="刪除這張影像與其辨識結果,含磁碟上的照片檔">刪除</button>
-                    </form>
-                }
+                    @if (canDelete)
+                    {
+                        <form method="post" asp-action="DeleteImage" asp-route-id="@img.ImageId"
+                              class="js-delete-image m-0"
+                              data-hash="@img.FileHash[..8]"
+                              data-uploaded="@img.UploadedAt.ToLocalTime().ToString("MM/dd HH:mm")">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn btn-outline-danger btn-sm"
+                                    title="刪除這張影像與其辨識結果,含磁碟上的照片檔">刪除</button>
+                        </form>
+                    }
+                </div>
             </div>
         }
     </div>

@@ -12,6 +12,9 @@ public enum PatientStatus : byte { InCare = 1, AwaitingEvacuation = 2, Evacuatin
 /// <summary>性別:1 男、2 女、3 其他</summary>
 public enum Gender : byte { Male = 1, Female = 2, Other = 3 }
 
+/// <summary>與本次災難之相關性:1 直接、2 間接、3 無相關(戰情看板統計用)</summary>
+public enum DisasterRelation : byte { Direct = 1, Indirect = 2, Unrelated = 3 }
+
 /// <summary>傷患主檔(架構書 6.2.1)。主鍵採 GUID,避免多站離線建檔衝突。</summary>
 public class Patient
 {
@@ -45,6 +48,9 @@ public class Patient
 
     public TriageLevel CurrentTriage { get; set; }
     public PatientStatus Status { get; set; } = PatientStatus.InCare;
+
+    /// <summary>與本次災難之相關性:直接/間接/無相關,尚未評估時為 null(戰情看板統計用)</summary>
+    public DisasterRelation? DisasterRelation { get; set; }
 
     /// <summary>現病史(附錄 B:自由文字;人形圖傷部標記保留於原始影像)</summary>
     public string? PresentIllness { get; set; }

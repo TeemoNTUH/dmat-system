@@ -36,6 +36,11 @@ public class PatientsController(
             .FirstOrDefaultAsync(p => p.PatientId == id);
         if (patient is null) return NotFound();
 
+        // 重新檢傷面板要能勾選/取消「主要初步診斷」,需要完整的診斷代碼字典
+        // (不只是這位傷患目前已有的診斷),因此另外查詢。
+        ViewBag.DiagnosisCodes = await db.DiagnosisCodes
+            .OrderBy(c => c.Category).ThenBy(c => c.ItemNo).ToListAsync();
+
         // 身分證字號預設遮罩顯示(附錄 B.3);完整內容僅授權角色可檢視,本切片一律遮罩
         string? maskedNationalId = null;
         if (patient.NationalIdEncrypted is not null)
@@ -72,21 +77,35 @@ public class PatientsController(
     public Task<IActionResult> UpdateStatus(Guid id, PatientStatus status) =>
         RunAsync(id, () => careService.UpdateStatusAsync(id, status, CurrentUserId));
 
-    /// <summary>修正基本資料(OCR 誤讀、事後補齊)。</summary>
+    /// <summary>更新與本次災難之相關性(直接/間接/無相關),供戰情看板統計。</summary>
+    [HttpPost, ValidateAntiForgeryToken, Authorize(Roles = CareRoles)]
+    public Task<IActionResult> UpdateDisasterRelation(Guid id, DisasterRelation? relation) =>
+        RunAsync(id, () => careService.UpdateDisasterRelationAsync(id, relation));
+
+    /// <summary>修正基本資料(OCR 誤讀、事後補齊),含過去重要病史。</summary>
     [HttpPost, ValidateAntiForgeryToken, Authorize(Roles = CareRoles)]
     public Task<IActionResult> Edit(
         Guid id, string? tagNo, string? name, Gender? gender, short? estAge,
-        DateOnly? birthDate, string? nationalId, string? nationality, string? presentIllness) =>
+        DateOnly? birthDate, string? nationalId, string? nationality, string? presentIllness,
+        bool? pregnant, bool vaccineTetanus, bool vaccineOther, string? vaccineOtherNote,
+        bool? hasAllergy, string? allergyNote,
+        bool chronicDiabetes, bool chronicHypertension, bool chronicDialysis, bool chronicHeartFailure,
+        bool chronicAsthma, bool chronicCopd, bool chronicOther, string? chronicOtherNote) =>
         RunAsync(id, () => careService.UpdateDetailsAsync(id, new PatientCareService.PatientEdit(
-            tagNo, name, gender, estAge, birthDate, nationalId, nationality, presentIllness)));
+            tagNo, name, gender, estAge, birthDate, nationalId, nationality, presentIllness,
+            pregnant, vaccineTetanus, vaccineOther, vaccineOtherNote, hasAllergy, allergyNote,
+            chronicDiabetes, chronicHypertension, chronicDialysis, chronicHeartFailure,
+            chronicAsthma, chronicCopd, chronicOther, chronicOtherNote)));
 
-    /// <summary>現場重新檢傷:新增一筆檢傷紀錄並更新目前分類。</summary>
+    /// <summary>現場重新檢傷:新增一筆檢傷紀錄並更新目前分類,可一併修正主要初步診斷。</summary>
     [HttpPost, ValidateAntiForgeryToken, Authorize(Roles = CareRoles)]
     public Task<IActionResult> Retriage(
         Guid id, TriageLevel level, string? consciousness, decimal? temp,
-        short? sbp, short? dbp, short? hr, short? rr, short? spO2) =>
+        short? sbp, short? dbp, short? hr, short? rr, short? spO2,
+        int[]? diagnosisCodeIds, string? traumaOtherNote, string? nonTraumaOtherNote) =>
         RunAsync(id, () => careService.RetriageAsync(id, new PatientCareService.RetriageInput(
-            level, consciousness, temp, sbp, dbp, hr, rr, spO2), CurrentUserId));
+            level, consciousness, temp, sbp, dbp, hr, rr, spO2,
+            diagnosisCodeIds, traumaOtherNote, nonTraumaOtherNote), CurrentUserId));
 
     /// <summary>
     /// 三個照護動作的共同收尾:回報訊息、推播儀表板、導回明細。

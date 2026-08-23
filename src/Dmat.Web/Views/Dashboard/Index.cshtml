@@ -7,7 +7,9 @@
     // 刪除病歷是不可逆操作,僅系統管理者可見可用(架構書 8.2)
     var canDelete = User.IsInRole(RoleNames.Admin);
 }
-<div class="d-flex justify-content-between align-items-center mb-3">
+@* 手機板寬度不夠橫排標題與連線狀態,兩者會擠在一起、字被截斷 ——
+   小螢幕(< md)改為各自獨立一排,桌機(≥ md)維持原本左右並排。 *@
+<div class="d-flex flex-column flex-md-row justify-content-md-between align-items-md-center mb-3 gap-1">
     <h4 class="mb-0">傷情態勢儀表板</h4>
     <span class="small text-muted">
         連線狀態:<span id="connState" class="badge bg-secondary">連線中…</span>
@@ -29,7 +31,7 @@
     string W(int n) => (n * 100.0 / triageTotal).ToString("0.#", inv);
 }
 <div class="card mb-3">
-    <div class="card-header py-2 fw-bold d-flex justify-content-between align-items-center">
+    <div class="card-header py-2 fw-bold d-flex flex-column flex-md-row justify-content-md-between align-items-md-center gap-1">
         <span>大量傷患醫療應變戰情看板</span>
         <span class="small text-muted fw-normal">數值即時取自傷患主檔</span>
     </div>

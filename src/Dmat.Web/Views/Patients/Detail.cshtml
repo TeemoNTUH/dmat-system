@@ -23,32 +23,63 @@
        現場常戴手套單手操作,兩段式操作既慢又容易誤選。
        目前狀態以實心按鈕標示,一眼就知道現在在哪一段。 *@
     <div class="card mb-3">
-        <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2">
-            <span class="fw-bold me-1">動向</span>
-            @foreach (var s in Enum.GetValues<PatientStatus>())
-            {
-                var current = Model.Status == s;
-                var deceased = s == PatientStatus.Deceased;
-                // 樣式與確認旗標先算好再套用。屬性值裡放跨行三元或巢狀引號,
-                // 是 Razor 剖析最容易出錯的寫法,拆成變數既安全也好讀。
-                var btnClass = (current, deceased) switch
+        @*
+            標題獨立一行、按鈕另外一整排(手機板寬度不夠橫排標題+按鈕,
+            擠在一起會讓按鈕文字被迫換行,中文字甚至被拆成一個字一行、
+            看起來像直排文字。按鈕本身加 text-nowrap,搭配外層 flex-wrap,
+            讓「換行」永遠是整顆按鈕換到下一行,而不是按鈕裡的文字自己斷開。
+        *@
+        <div class="card-body py-2">
+            <div class="fw-bold mb-2">動向</div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                @foreach (var s in Enum.GetValues<PatientStatus>())
                 {
-                    (true, true) => "btn-dark",
-                    (true, false) => "btn-primary",
-                    (false, true) => "btn-outline-dark",
-                    (false, false) => "btn-outline-primary",
-                };
-                var needConfirm = deceased && !current ? "true" : null;
-                <form method="post" asp-action="UpdateStatus" asp-route-id="@Model.PatientId" class="m-0">
-                    @Html.AntiForgeryToken()
-                    <input type="hidden" name="status" value="@((byte)s)" />
-                    <button type="submit" disabled="@current" class="btn btn-lg @btnClass"
-                            data-confirm-deceased="@needConfirm">
-                        @PatientCareService.StatusLabel(s)
-                    </button>
-                </form>
-            }
-            <span class="text-muted small ms-auto">目前:@PatientCareService.StatusLabel(Model.Status)</span>
+                    var current = Model.Status == s;
+                    var deceased = s == PatientStatus.Deceased;
+                    // 樣式與確認旗標先算好再套用。屬性值裡放跨行三元或巢狀引號,
+                    // 是 Razor 剖析最容易出錯的寫法,拆成變數既安全也好讀。
+                    var btnClass = (current, deceased) switch
+                    {
+                        (true, true) => "btn-dark",
+                        (true, false) => "btn-primary",
+                        (false, true) => "btn-outline-dark",
+                        (false, false) => "btn-outline-primary",
+                    };
+                    var needConfirm = deceased && !current ? "true" : null;
+                    <form method="post" asp-action="UpdateStatus" asp-route-id="@Model.PatientId" class="m-0">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="status" value="@((byte)s)" />
+                        <button type="submit" disabled="@current" class="btn btn-sm text-nowrap @btnClass"
+                                data-confirm-deceased="@needConfirm">
+                            @PatientCareService.StatusLabel(s)
+                        </button>
+                    </form>
+                }
+                <span class="text-muted small ms-auto">目前:@PatientCareService.StatusLabel(Model.Status)</span>
+            </div>
+        </div>
+
+        @* --- 災難相關性(直接/間接/無相關) ---------------------------------
+           與動向同一張卡、同樣的一鍵按鈕互動方式:這是現場常隨問診結果調整的
+           快速判斷,不該埋進要展開才看得到的「修正基本資料」表單裡。
+           送出後即時反映在戰情看板的「直接災難相關比例」(見 DashboardService)。 *@
+        <div class="card-body py-2 border-top">
+            <div class="fw-bold mb-2">災難相關性</div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                @foreach (var r in Enum.GetValues<DisasterRelation>())
+                {
+                    var current = Model.DisasterRelation == r;
+                    <form method="post" asp-action="UpdateDisasterRelation" asp-route-id="@Model.PatientId" class="m-0">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="relation" value="@((byte)r)" />
+                        <button type="submit" disabled="@current"
+                                class="btn btn-sm text-nowrap @(current ? "btn-primary" : "btn-outline-primary")">
+                            @PatientCareService.DisasterRelationLabel(r)
+                        </button>
+                    </form>
+                }
+                <span class="text-muted small ms-auto">目前:@PatientCareService.DisasterRelationLabel(Model.DisasterRelation)</span>
+            </div>
         </div>
     </div>
 
@@ -93,22 +124,76 @@
                     <label class="form-label small mb-1" for="dbp">舒張壓</label>
                     <input class="form-control" id="dbp" name="dbp" type="number" value="@latest?.Dbp" />
                 </div>
-                <div class="col-4 col-md-2">
+                @* 脈搏/呼吸/血氧原本用 col-4(手機上一排擠三個),比其他生命徵象欄位
+                   窄了一截,標籤在窄欄位裡容易被迫逐字換行,看起來像直排文字。
+                   改成跟其他欄位一樣的 col-6(手機一排兩個),桌機維持原本的緊湊排列。 *@
+                <div class="col-6 col-md-2">
                     <label class="form-label small mb-1" for="hr">脈搏</label>
                     <input class="form-control" id="hr" name="hr" type="number" value="@latest?.Hr" />
                 </div>
-                <div class="col-4 col-md-2">
+                <div class="col-6 col-md-2">
                     <label class="form-label small mb-1" for="rr">呼吸</label>
                     <input class="form-control" id="rr" name="rr" type="number" value="@latest?.Rr" />
                 </div>
-                <div class="col-4 col-md-2">
+                <div class="col-6 col-md-2">
                     <label class="form-label small mb-1" for="spO2">血氧 %</label>
                     <input class="form-control" id="spO2" name="spO2" type="number" value="@latest?.SpO2" />
                 </div>
             </div>
+
+            @* --- 主要初步診斷(重新檢傷時一併修正) -----------------------------
+               與生命徵象不同,診斷不是「新增一筆歷程」而是目前判斷的完整狀態,
+               所以這裡送出的勾選內容會直接取代舊的診斷清單(可增可刪,見
+               PatientCareService.SyncDiagnosesAsync)。 *@
+            @{
+                var diagnosisCodes = (ViewBag.DiagnosisCodes as List<DiagnosisCode>) ?? [];
+                var currentDxIds = Model.Diagnoses.Select(d => d.DiagnosisCodeId).ToHashSet();
+                var traumaOtherNow = Model.Diagnoses
+                    .FirstOrDefault(d => d.DiagnosisCode!.Category == 1 && d.DiagnosisCode.NameZh.StartsWith("其他"))?.Note;
+                var nonTraumaOtherNow = Model.Diagnoses
+                    .FirstOrDefault(d => d.DiagnosisCode!.Category == 2 && d.DiagnosisCode.NameZh.StartsWith("其他"))?.Note;
+            }
+            <div class="fw-bold mt-3 mb-1">主要初步診斷 <span class="fw-normal text-muted small">(取消勾選＝移除該筆診斷)</span></div>
+            <div class="border rounded p-2 mb-2">
+                <div class="small fw-bold text-danger mb-1">創傷診斷</div>
+                <div class="row g-1">
+                    @foreach (var c in diagnosisCodes.Where(c => c.Category == 1))
+                    {
+                        <div class="col-6 col-md-4 col-xl-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" value="@c.DiagnosisCodeId"
+                                       name="diagnosisCodeIds" id="dx_@c.DiagnosisCodeId"
+                                       checked="@currentDxIds.Contains(c.DiagnosisCodeId)" />
+                                <label class="form-check-label small" for="dx_@c.DiagnosisCodeId">@c.ItemNo @c.NameZh</label>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <input class="form-control form-control-sm mt-1" name="traumaOtherNote"
+                       placeholder="創傷「其他外科」補充說明" value="@traumaOtherNow" />
+            </div>
+            <div class="border rounded p-2 mb-2">
+                <div class="small fw-bold text-primary mb-1">非創傷診斷</div>
+                <div class="row g-1">
+                    @foreach (var c in diagnosisCodes.Where(c => c.Category == 2))
+                    {
+                        <div class="col-6 col-md-4 col-xl-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" value="@c.DiagnosisCodeId"
+                                       name="diagnosisCodeIds" id="dx_@c.DiagnosisCodeId"
+                                       checked="@currentDxIds.Contains(c.DiagnosisCodeId)" />
+                                <label class="form-check-label small" for="dx_@c.DiagnosisCodeId">@c.ItemNo @c.NameZh</label>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <input class="form-control form-control-sm mt-1" name="nonTraumaOtherNote"
+                       placeholder="非創傷「其他」補充說明" value="@nonTraumaOtherNow" />
+            </div>
+
             <div class="d-grid d-md-block mt-3">
                 <button type="submit" class="btn btn-danger btn-lg">新增檢傷紀錄</button>
-                <span class="form-text ms-md-2">生命徵象已預填上一筆的值,只需改動有變化的欄位。</span>
+                <span class="form-text ms-md-2">生命徵象已預填上一筆的值,只需改動有變化的欄位;診斷勾選狀態會直接取代舊清單。</span>
             </div>
         </form>
     </div>
@@ -158,10 +243,107 @@
                     <textarea class="form-control" id="presentIllness" name="presentIllness" rows="2">@Model.PresentIllness</textarea>
                 </div>
             </div>
+
+            @* --- 過去重要病史 ---------------------------------------------
+               與上方基本資料欄位不同,這裡整批呈現目前完整狀態並整批送出
+               (如同覆核表單),讓現場也能把勾錯的項目取消,而不只是新增。 *@
+            @{
+                var h = Model.PastHistory;
+            }
+            <div class="fw-bold mt-3 mb-1">過去重要病史</div>
+            <div class="row g-2 align-items-end">
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="pregnant">懷孕</label>
+                    <select class="form-select" id="pregnant" name="pregnant">
+                        <option value="" selected="@(h?.Pregnant is null)">未填/不適用</option>
+                        <option value="true" selected="@(h?.Pregnant == true)">是</option>
+                        <option value="false" selected="@(h?.Pregnant == false)">否</option>
+                    </select>
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="hasAllergy">過敏史</label>
+                    <select class="form-select" id="hasAllergy" name="hasAllergy">
+                        <option value="" selected="@(h?.HasAllergy is null)">未填</option>
+                        <option value="true" selected="@(h?.HasAllergy == true)">有</option>
+                        <option value="false" selected="@(h?.HasAllergy == false)">無</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label small mb-1" for="allergyNote">過敏史補充</label>
+                    <input class="form-control" id="allergyNote" name="allergyNote" value="@h?.AllergyNote" />
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="vaccineTetanus" name="vaccineTetanus" value="true" checked="@(h?.VaccineTetanus ?? false)" />
+                        <label class="form-check-label" for="vaccineTetanus">疫苗-破傷風</label>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="vaccineOther" name="vaccineOther" value="true" checked="@(h?.VaccineOther ?? false)" />
+                        <label class="form-check-label" for="vaccineOther">疫苗-其他</label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label small mb-1" for="vaccineOtherNote">疫苗-其他補充</label>
+                    <input class="form-control" id="vaccineOtherNote" name="vaccineOtherNote" value="@h?.VaccineOtherNote" />
+                </div>
+            </div>
+            <div class="row g-2 mt-1">
+                <div class="col-12 small text-muted mb-0">慢性疾病</div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="chronicDiabetes" name="chronicDiabetes" value="true" checked="@(h?.ChronicDiabetes ?? false)" />
+                        <label class="form-check-label" for="chronicDiabetes">糖尿病</label>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="chronicHypertension" name="chronicHypertension" value="true" checked="@(h?.ChronicHypertension ?? false)" />
+                        <label class="form-check-label" for="chronicHypertension">高血壓</label>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="chronicDialysis" name="chronicDialysis" value="true" checked="@(h?.ChronicDialysis ?? false)" />
+                        <label class="form-check-label" for="chronicDialysis">長期透析</label>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="chronicHeartFailure" name="chronicHeartFailure" value="true" checked="@(h?.ChronicHeartFailure ?? false)" />
+                        <label class="form-check-label" for="chronicHeartFailure">心衰竭</label>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="chronicAsthma" name="chronicAsthma" value="true" checked="@(h?.ChronicAsthma ?? false)" />
+                        <label class="form-check-label" for="chronicAsthma">氣喘</label>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="chronicCopd" name="chronicCopd" value="true" checked="@(h?.ChronicCopd ?? false)" />
+                        <label class="form-check-label" for="chronicCopd">COPD</label>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="chronicOther" name="chronicOther" value="true" checked="@(h?.ChronicOther ?? false)" />
+                        <label class="form-check-label" for="chronicOther">其他</label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label small mb-1" for="chronicOtherNote">慢性疾病-其他補充</label>
+                    <input class="form-control" id="chronicOtherNote" name="chronicOtherNote" value="@h?.ChronicOtherNote" />
+                </div>
+            </div>
+
             <div class="d-grid d-md-block mt-3">
                 <button type="submit" class="btn btn-primary btn-lg">儲存修正</button>
                 <span class="form-text ms-md-2">
                     身分證字號為加密欄位,<b>留空代表不變更</b>;要清空請填入單一個「-」。
+                    過去重要病史整批送出目前狀態,可直接取消原本勾錯的項目。
                     所有修改都會寫入稽核紀錄。
                 </span>
             </div>
