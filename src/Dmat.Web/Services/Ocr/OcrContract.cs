@@ -29,6 +29,61 @@ public class OcrAnalyzeResult
     /// <summary>資料合理性檢核警示(生命徵象範圍、檢傷邏輯)</summary>
     [JsonPropertyName("warnings")]
     public List<string> Warnings { get; set; } = [];
+
+    /// <summary>
+    /// AI 服務各階段耗時(轉寫 / 規則結構化 / 各題複查 / 複查整批),隨 ResultJson 存入資料庫,
+    /// 用來判斷辨識慢在哪一段。只保留計時與摘要欄位 ——
+    /// AI 服務回傳的 evidence、複查答案等含病歷內容的欄位刻意不收(見 <see cref="OcrStageTiming"/>)。
+    /// </summary>
+    [JsonPropertyName("stages")]
+    public List<OcrStageTiming> Stages { get; set; } = [];
+
+    /// <summary>
+    /// Web 端量測的整體往返耗時(毫秒):上傳、AI 服務前處理、所有推論與網路時間都算在內。
+    /// 失敗(含逾時)時也會記錄,用來對照 <c>AiService:TimeoutSeconds</c> 是否太緊。
+    /// </summary>
+    [JsonPropertyName("elapsedMs")]
+    public long? ElapsedMs { get; set; }
+}
+
+/// <summary>
+/// 單一辨識階段的計時紀錄(對應 AI 服務回傳 stages[] 的子集)。
+/// 未列出的屬性(evidence、answer 等)反序列化時直接略過,不會進資料庫。
+/// </summary>
+public class OcrStageTiming
+{
+    /// <summary>ocr_transcribe / structure_rules / verify / verify_batch / direct_json</summary>
+    [JsonPropertyName("stage")] public string Stage { get; set; } = "";
+
+    [JsonPropertyName("elapsedMs")] public long? ElapsedMs { get; set; }
+
+    /// <summary>複查題目名稱(如「檢傷分類」),僅 verify 階段有值</summary>
+    [JsonPropertyName("target")] public string? Target { get; set; }
+
+    /// <summary>複查題型:single / multi / value</summary>
+    [JsonPropertyName("kind")] public string? Kind { get; set; }
+
+    /// <summary>轉寫輸出字數(ocr_transcribe / direct_json);字數異常多通常代表模型重複輸出</summary>
+    [JsonPropertyName("chars")] public int? Chars { get; set; }
+
+    /// <summary>規則結構化擷取到的欄位數(structure_rules)</summary>
+    [JsonPropertyName("extracted")] public int? Extracted { get; set; }
+
+    /// <summary>複查答案是否被採用(verify)</summary>
+    [JsonPropertyName("applied")] public bool? Applied { get; set; }
+
+    /// <summary>
+    /// 複查回答因超過 DMAT_VERIFY_MAX_TOKENS 被截斷(verify)。代表模型沒照指示只回答答案,
+    /// 該題一律不採用、沿用第一輪結果;經常出現時表示該題提示詞需要調整。
+    /// </summary>
+    [JsonPropertyName("truncated")] public bool? Truncated { get; set; }
+
+    /// <summary>複查題數與併發上限(verify_batch)</summary>
+    [JsonPropertyName("tasks")] public int? Tasks { get; set; }
+    [JsonPropertyName("concurrency")] public int? Concurrency { get; set; }
+
+    /// <summary>該階段失敗原因(verify 失敗時)</summary>
+    [JsonPropertyName("error")] public string? Error { get; set; }
 }
 
 public class OcrFieldValue

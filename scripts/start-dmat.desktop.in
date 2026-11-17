@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DMAT 開發環境
+Comment=啟動 AI 辨識服務與 Web 應用並開啟瀏覽器
+# 範本檔:@DMAT_ROOT@ 由 scripts/install-desktop-launcher.sh 換成本機專案路徑。
+# 請勿把產生後(含絕對路徑)的檔案提交回 repo。
+Exec=bash "@DMAT_ROOT@/start-dev.sh"
+Path=@DMAT_ROOT@
+Icon=utilities-terminal
+Terminal=true
+Categories=Development;

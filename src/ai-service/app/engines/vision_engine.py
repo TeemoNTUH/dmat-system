@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import time
@@ -125,18 +126,76 @@ class VisionEngine(OcrEngine):
         """第三階段:對不確定的地方帶著同一張影像回頭問模型(見 app/verify.py)。
 
         任何一題失敗都只跳過該題 —— 複查是加分項,不能讓它拖垮整筆辨識。
+
+        各題**同時送出**:每一題的提示詞在 ``plan`` 階段就已定好,答案只取決於影像本身,
+        彼此互不依賴,因此可交給推論伺服器(vLLM 等)一起批次處理,
+        總耗時接近「最慢那一題」而非「所有題目相加」。
+        合併答案(``apply``)仍依原本的題目順序逐一進行,結果與逐題送出時完全相同。
+        ``DMAT_VERIFY_CONCURRENCY`` 可限制同時送出的題數(推論端記憶體吃緊時調低)。
         """
         tasks = verify.plan(fields, evidence, max_tasks=config.VERIFY_MAX_TASKS)
         if not tasks:
             return
 
-        for task in tasks:
-            t0 = time.perf_counter()
-            try:
-                answer = await self._chat(client, task.prompt, data_uri)
-            except EngineError as exc:
+        limit = asyncio.Semaphore(max(1, config.VERIFY_CONCURRENCY or len(tasks)))
+
+        async def ask(task: verify.VerifyTask) -> tuple[str | None, bool, EngineError | None, float]:
+            async with limit:
+                t0 = time.perf_counter()
+                try:
+                    text, truncated = await self._chat_full(
+                        client, task.prompt, data_uri, max_tokens=config.VERIFY_MAX_TOKENS
+                    )
+                    return text, truncated, None, time.perf_counter() - t0
+                except EngineError as exc:
+                    return None, False, exc, time.perf_counter() - t0
+
+        t_all = time.perf_counter()
+        results = await asyncio.gather(*(ask(t) for t in tasks))
+        batch_ms = round((time.perf_counter() - t_all) * 1000)
+        logger.info("複查 %d 題同時送出,共耗時 %.1f 秒", len(tasks), batch_ms / 1000)
+        # 各題 elapsedMs 彼此重疊,加總不等於實際花費;整批的牆鐘時間另記一筆
+        stages.append(
+            {
+                "stage": "verify_batch",
+                "tasks": len(tasks),
+                "concurrency": config.VERIFY_CONCURRENCY or len(tasks),
+                "elapsedMs": batch_ms,
+            }
+        )
+
+        for task, (answer, truncated, exc, elapsed) in zip(tasks, results):
+            if truncated:
+                # 複查只該回答一個選項/編號;回答長到被截斷,代表模型沒照指示
+                # (通常是又把整頁轉寫一遍)。這種輸出裡第一個數字常是表單標題的項次
+                # (如「1.檢傷分類」的 1),硬解析會把錯的值以高信心寫回,因此一律不採用。
+                logger.warning(
+                    "複查「%s」的回答超過 %d token 被截斷(模型未依指示只回答答案),沿用第一輪結果",
+                    task.label, config.VERIFY_MAX_TOKENS,
+                )
+                stages.append(
+                    {
+                        "stage": "verify",
+                        "target": task.label,
+                        "kind": task.kind,
+                        "elapsedMs": round(elapsed * 1000),
+                        "answer": (answer or "").strip()[:80],
+                        "applied": False,
+                        "truncated": True,
+                    }
+                )
+                continue
+
+            if exc is not None or answer is None:
                 logger.warning("複查「%s」失敗,沿用第一輪結果:%s", task.label, exc)
-                stages.append({"stage": "verify", "target": task.label, "error": str(exc)})
+                stages.append(
+                    {
+                        "stage": "verify",
+                        "target": task.label,
+                        "elapsedMs": round(elapsed * 1000),
+                        "error": str(exc),
+                    }
+                )
                 continue
 
             applied = verify.apply(task, answer, fields, evidence)
@@ -146,17 +205,24 @@ class VisionEngine(OcrEngine):
                     "stage": "verify",
                     "target": task.label,
                     "kind": task.kind,
-                    "elapsedMs": round((time.perf_counter() - t0) * 1000),
+                    "elapsedMs": round(elapsed * 1000),
                     "answer": answer.strip()[:80],
                     "applied": applied,
                 }
             )
 
     async def _chat(self, client: httpx.AsyncClient, prompt: str, data_uri: str) -> str:
+        text, _ = await self._chat_full(client, prompt, data_uri)
+        return text
+
+    async def _chat_full(
+        self, client: httpx.AsyncClient, prompt: str, data_uri: str, max_tokens: int | None = None
+    ) -> tuple[str, bool]:
+        """呼叫推論端點,回傳 (文字, 是否因達到 max_tokens 而被截斷)。"""
         payload = {
             "model": config.VISION_MODEL,
             "temperature": config.VISION_TEMPERATURE,
-            "max_tokens": config.VISION_MAX_TOKENS,
+            "max_tokens": max_tokens or config.VISION_MAX_TOKENS,
             "messages": [
                 {
                     "role": "user",
@@ -189,7 +255,9 @@ class VisionEngine(OcrEngine):
 
         try:
             body = resp.json()
-            return body["choices"][0]["message"]["content"] or ""
+            choice = body["choices"][0]
+            # OpenAI 相容格式:finish_reason == "length" 代表輸出撞到 max_tokens 被截斷
+            return choice["message"]["content"] or "", choice.get("finish_reason") == "length"
         except (KeyError, IndexError, ValueError) as exc:
             raise EngineError(f"推論服務回應格式非預期:{resp.text[:300]}") from exc
 

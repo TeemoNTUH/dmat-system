@@ -146,7 +146,10 @@ public class ImageIntakeService(
             return OcrAttempt.Fail("影像在辨識開始前已被刪除。");
 
         using var stream = new MemoryStream(bytes, writable: false);
+        // 整體往返時間(含上傳、前處理、所有推論),成功或失敗都存進 ResultJson.elapsedMs
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var attempt = await ocrClient.AnalyzeAsync(stream, fileName, ct);
+        stopwatch.Stop();
 
         // 覆核尚未完成前可重複辨識,舊結果直接覆寫(已覆核者由 ReanalyzeAsync 擋掉)。
         //
@@ -174,6 +177,7 @@ public class ImageIntakeService(
             {
                 Model = "(辨識失敗)",
                 Warnings = [$"AI 辨識未成功,已切換為人工輸入模式。原因:{attempt.Error}"],
+                ElapsedMs = stopwatch.ElapsedMilliseconds,
             };
             slot.ResultJson = JsonSerializer.Serialize(diagnostic, JsonOpts);
             slot.ModelName = "(辨識失敗)";
@@ -187,6 +191,7 @@ public class ImageIntakeService(
         }
 
         var result = attempt.Result!;
+        result.ElapsedMs = stopwatch.ElapsedMilliseconds;
         ApplyConfidenceThresholds(result);
         slot.ResultJson = JsonSerializer.Serialize(result, JsonOpts);
         slot.ModelName = Truncate(result.Model, 100);
@@ -202,7 +207,40 @@ public class ImageIntakeService(
 
         logger.LogInformation("影像 {ImageId} 辨識完成(模型 {Model},mock={IsMock}),進入覆核佇列",
             image.ImageId, result.Model, result.IsMock);
+        logger.LogInformation("影像 {ImageId} 辨識耗時 {TotalSeconds:0.0} 秒:{StageTimings}",
+            image.ImageId, stopwatch.Elapsed.TotalSeconds, DescribeStageTimings(result.Stages));
         return attempt;
+    }
+
+    /// <summary>
+    /// 把各階段耗時整理成一行日誌,例如「轉寫 182.3s(5210字)、規則 0.1s、複查×3 41.0s(最慢 檢傷分類)」。
+    /// 複查各題同時送出,彼此時間重疊,因此以 verify_batch 的整批時間為準,不把各題相加。
+    /// </summary>
+    private static string DescribeStageTimings(List<OcrStageTiming> stages)
+    {
+        if (stages.Count == 0) return "(AI 服務未回報分段耗時)";
+        static string Sec(long? ms) => ms is null ? "?" : $"{ms.Value / 1000.0:0.0}s";
+
+        var parts = new List<string>();
+        foreach (var s in stages.Where(x => x.Stage is "ocr_transcribe" or "direct_json"))
+            parts.Add($"{(s.Stage == "ocr_transcribe" ? "轉寫" : "直接JSON")} {Sec(s.ElapsedMs)}"
+                      + (s.Chars is null ? "" : $"({s.Chars}字)"));
+        foreach (var s in stages.Where(x => x.Stage == "structure_rules"))
+            parts.Add($"規則 {Sec(s.ElapsedMs)}");
+
+        var verifies = stages.Where(x => x.Stage == "verify").ToList();
+        var batch = stages.FirstOrDefault(x => x.Stage == "verify_batch");
+        if (verifies.Count > 0)
+        {
+            var slowest = verifies.MaxBy(x => x.ElapsedMs ?? 0);
+            var failed = verifies.Count(x => x.Error is not null);
+            var truncated = verifies.Where(x => x.Truncated == true).Select(x => x.Target ?? "?").ToList();
+            parts.Add($"複查×{verifies.Count} {Sec(batch?.ElapsedMs ?? verifies.Sum(x => x.ElapsedMs ?? 0))}"
+                      + (slowest?.Target is null ? "" : $"(最慢 {slowest.Target} {Sec(slowest.ElapsedMs)})")
+                      + (failed > 0 ? $",失敗 {failed} 題" : "")
+                      + (truncated.Count > 0 ? $",回答被截斷未採用:{string.Join("/", truncated)}" : ""));
+        }
+        return string.Join("、", parts);
     }
 
     /// <summary>

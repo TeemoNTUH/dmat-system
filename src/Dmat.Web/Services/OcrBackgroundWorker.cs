@@ -5,11 +5,17 @@ using Microsoft.EntityFrameworkCore;
 namespace Dmat.Web.Services;
 
 /// <summary>
-/// 背景辨識服務:從 <see cref="OcrJobQueue"/> 取出影像逐一辨識。
+/// 背景辨識服務:從 <see cref="OcrJobQueue"/> 取出影像辨識。
 ///
-/// **逐一處理而非平行**:推論伺服器同時只跑得動一張紀錄單(GB10 單卡),
-/// 平行送出只會讓每一張都變慢,還可能撞上記憶體上限。序列處理也讓
-/// 覆核佇列的出現順序與拍攝順序一致,現場比較好對照。
+/// **同時處理張數由 <c>AiService:Concurrency</c> 決定(預設 1)。**
+/// 早期假設「GB10 單卡同時只跑得動一張」,因此逐一處理;但實測轉寫階段是逐字輸出、
+/// 受記憶體頻寬限制,GPU 算力多半閒置,而 vLLM 會把同時進來的請求合併批次處理,
+/// 同時送 2~3 張通常每張只慢一些、整體每小時處理量明顯提升。
+/// 實際上限依推論端記憶體與模型而定 —— 調高後請對照日誌「辨識耗時」確認單張沒有逼近
+/// <c>AiService:TimeoutSeconds</c>。設為 1 即恢復逐一處理(覆核佇列順序與拍攝順序一致)。
+/// 併發時完成順序可能與拍攝順序略有出入。
+///
+/// **同一張影像同一時間只會有一個工作者處理**(見 <see cref="OcrJobQueue.TryBeginProcessing"/>)。
 ///
 /// **任何一張失敗都不能拖垮整個服務**:單張例外只記錄並繼續下一張。
 /// 影像本身已存檔,失敗的那張會停在 ManualFallback,可在覆核頁按「↻ 重新辨識」重試。
@@ -17,12 +23,29 @@ namespace Dmat.Web.Services;
 public class OcrBackgroundWorker(
     OcrJobQueue queue,
     IServiceScopeFactory scopeFactory,
+    IConfiguration configuration,
     ILogger<OcrBackgroundWorker> logger) : BackgroundService
 {
+    /// <summary>防呆上限:設錯成很大的數字時,不至於一次把整個佇列都丟給推論伺服器。</summary>
+    private const int MaxConcurrency = 8;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("背景辨識服務已啟動");
+        var concurrency = Math.Clamp(configuration.GetValue("AiService:Concurrency", 1), 1, MaxConcurrency);
+        logger.LogInformation("背景辨識服務已啟動(同時處理 {Concurrency} 張)", concurrency);
         await RequeueUnfinishedAsync(stoppingToken);
+
+        await Task.WhenAll(Enumerable.Range(1, concurrency)
+            .Select(n => RunWorkerAsync(n, stoppingToken)));
+
+        logger.LogInformation("背景辨識服務已停止");
+    }
+
+    /// <summary>單一工作者:不斷取出影像辨識,直到服務關閉。</summary>
+    private async Task RunWorkerAsync(int workerNo, CancellationToken stoppingToken)
+    {
+        // 讓出執行緒,確保各工作者真的並行啟動,而不是第一個工作者在同步路徑上獨佔
+        await Task.Yield();
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -36,6 +59,13 @@ public class OcrBackgroundWorker(
                 break;   // 服務關閉
             }
 
+            if (!queue.TryBeginProcessing(imageId))
+            {
+                logger.LogInformation(
+                    "影像 {ImageId} 正由其他工作者辨識中,本次重新辨識要求將在其完成後自動排回佇列", imageId);
+                continue;
+            }
+
             try
             {
                 // DbContext 是 Scoped,背景工作沒有請求範圍,必須自建一個
@@ -44,9 +74,10 @@ public class OcrBackgroundWorker(
                 var result = await intake.ProcessAsync(imageId, stoppingToken);
 
                 if (result.OcrSucceeded)
-                    logger.LogInformation("背景辨識完成:{ImageId}", imageId);
+                    logger.LogInformation("背景辨識完成(工作者 {WorkerNo}):{ImageId}", workerNo, imageId);
                 else
-                    logger.LogWarning("背景辨識未成功:{ImageId} — {Error}", imageId, result.OcrError);
+                    logger.LogWarning("背景辨識未成功(工作者 {WorkerNo}):{ImageId} — {Error}",
+                        workerNo, imageId, result.OcrError);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -58,9 +89,11 @@ public class OcrBackgroundWorker(
                 // 單張失敗不得中斷佇列 —— 後面還有其他傷患的紀錄單在等
                 logger.LogError(ex, "背景辨識發生未預期錯誤:{ImageId}", imageId);
             }
+            finally
+            {
+                queue.EndProcessing(imageId);
+            }
         }
-
-        logger.LogInformation("背景辨識服務已停止");
     }
 
     /// <summary>

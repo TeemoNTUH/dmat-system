@@ -9,6 +9,7 @@ REST 介面(v1):
 
 啟動:uvicorn app.main:app --host 0.0.0.0 --port 8100
 """
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -61,7 +62,10 @@ async def _read_and_prepare(file: UploadFile):
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(400, "影像檔案為空")
-    return prepare_image(image_bytes)
+    # 前處理(EXIF 轉正、縮放、JPEG 重新壓縮)是同步的 CPU 工作,直接在事件迴圈上跑
+    # 會卡住同時進行中的其他辨識請求(Web 端可同時送多張,見 AiService:Concurrency),
+    # 因此丟到執行緒池執行。
+    return await asyncio.to_thread(prepare_image, image_bytes)
 
 
 

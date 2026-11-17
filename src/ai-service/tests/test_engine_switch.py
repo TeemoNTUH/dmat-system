@@ -281,6 +281,177 @@ def test_verification_can_be_disabled():
         _clear_env(keep_env_file=False)
 
 
+def _run_verify_concurrency(concurrency: str | None) -> tuple[int, dict, list[dict]]:
+    """以「多執行緒」假端點跑一次會觸發多題複查的辨識,回傳 (同時進行的最大請求數, 欄位, 階段)。
+
+    wsgiref 預設伺服器一次只處理一個請求,測不出併發,這裡改用 ThreadingWSGIServer;
+    每題複查刻意延遲 0.4 秒,讓「同時送出」與「逐題送出」在時間上能被區分。
+    """
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIServer
+
+    class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    lock = threading.Lock()
+    state = {"inflight": 0, "peak": 0}
+
+    def _app(environ, start_response):
+        if environ.get("PATH_INFO") == "/v1/models":
+            start_response("200 OK", [("Content-Type", "application/json")])
+            return [json.dumps({"data": [{"id": "fake"}]}).encode()]
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+        payload = json.loads(environ["wsgi.input"].read(length) or b"{}")
+        prompt = payload["messages"][0]["content"][0]["text"]
+
+        if "記號主體" in prompt or "傷票編號" in prompt:      # 複查題
+            with lock:
+                state["inflight"] += 1
+                state["peak"] = max(state["peak"], state["inflight"])
+            time.sleep(0.4)
+            with lock:
+                state["inflight"] -= 1
+            if "7.1 創傷" in prompt:
+                reply = "3"
+            elif "檢傷分類" in prompt:
+                reply = "3"
+            else:
+                reply = "SIM-20260701-001"
+        else:                                                 # 第一輪整頁轉寫
+            reply = (
+                "<p>1.檢傷分類:<input type='checkbox'>1 復甦急救<input type='checkbox'>2 緊急</p>"
+                "<p>3.基本資料</p><p>3.3 編號:( 傷票編號 )</p>"
+                "<p>7.主要初步診斷</p><p>7.1 創傷</p>"
+                "<p>1 <input type='checkbox'> 撕裂傷 "
+                "2 <input type='checkbox' checked> 表淺損傷 "
+                "3 <input type='checkbox' checked> 鈍挫傷、拉扭傷</p>"
+            )
+        start_response("200 OK", [("Content-Type", "application/json")])
+        return [json.dumps({"choices": [{"message": {"content": reply}}]}).encode()]
+
+    srv = make_server("127.0.0.1", 0, _app, server_class=_ThreadingWSGIServer, handler_class=_Quiet)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    time.sleep(0.1)
+    _clear_env(keep_env_file=False)
+    try:
+        env = {
+            "DMAT_ENGINE": "vision",
+            "DMAT_VISION_BASE_URL": f"http://127.0.0.1:{srv.server_port}",
+            "DMAT_VISION_MODEL": "datalab-to/chandra-ocr-2",
+            "DMAT_VERIFY": "1",
+        }
+        if concurrency is not None:
+            env["DMAT_VERIFY_CONCURRENCY"] = concurrency
+        os.environ.update(env)
+        with _fresh_client() as client:
+            r = client.post("/api/v1/ocr/analyze", files={"file": ("a.jpg", _photo(), "image/jpeg")})
+            assert r.status_code == 200, r.text
+            return state["peak"], r.json()["fields"], r.json()["stages"]
+    finally:
+        srv.shutdown()
+        _clear_env(keep_env_file=False)
+
+
+def test_verification_questions_are_sent_concurrently():
+    """複查各題應同時送出(總耗時≈最慢一題),且合併結果與逐題送出完全相同。"""
+    peak, f, stages = _run_verify_concurrency(None)
+    verify_stages = [s for s in stages if s["stage"] == "verify"]
+    assert len(verify_stages) >= 2, f"此情境應觸發多題複查:{stages}"
+    assert peak >= 2, f"複查應同時送出,實際同時進行的請求最多只有 {peak} 個"
+
+    # 結果不因併發而改變(與 test_verification_round_trip_corrects_tick_bleed 相同的期望值)
+    assert f["trauma_contusion_sprain"]["value"] is True
+    assert f["trauma_superficial_injury"]["value"] is False
+    assert f["triage"]["value"] == "3"
+    assert f["patient_tag_id"]["value"] == "SIM-20260701-001"
+
+    batch = [s for s in stages if s["stage"] == "verify_batch"]
+    assert len(batch) == 1 and batch[0]["tasks"] == len(verify_stages), stages
+    # 整批牆鐘時間應明顯小於各題相加(每題 0.4 秒)
+    assert batch[0]["elapsedMs"] < sum(s["elapsedMs"] for s in verify_stages), stages
+
+
+def test_verification_concurrency_can_be_limited_to_one():
+    """DMAT_VERIFY_CONCURRENCY=1 時恢復逐題送出(給不支援併發的推論後端用)。"""
+    peak, f, stages = _run_verify_concurrency("1")
+    assert peak == 1, f"限制為 1 時不應有併發請求,實際最多 {peak} 個"
+    assert f["triage"]["value"] == "3"
+    assert f["trauma_superficial_injury"]["value"] is False
+
+
+_FIRST_PASS_TRIAGE_UNTICKED = (
+    "<p>1.檢傷分類:<input type='checkbox'>1 復甦急救<input type='checkbox'>2 緊急</p>"
+    "<p>3.基本資料</p><p>3.3 編號:( 傷票編號 )</p>"
+)
+
+
+def _run_with_verify_reply(verify_reply: str, finish_reason: str, extra_env: dict | None = None):
+    """第一輪轉寫讓檢傷分類空白(必觸發複查),複查一律回 verify_reply。
+
+    回傳 (各請求的 max_tokens 清單[(是否複查, max_tokens)], 欄位, 階段)。
+    """
+    seen: list[tuple[bool, int]] = []
+
+    def _app(environ, start_response):
+        if environ.get("PATH_INFO") == "/v1/models":
+            start_response("200 OK", [("Content-Type", "application/json")])
+            return [json.dumps({"data": [{"id": "fake"}]}).encode()]
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+        payload = json.loads(environ["wsgi.input"].read(length) or b"{}")
+        prompt = payload["messages"][0]["content"][0]["text"]
+        is_verify = "記號主體" in prompt or "傷票編號" in prompt
+        seen.append((is_verify, payload["max_tokens"]))
+        if is_verify:
+            body = {"choices": [{"message": {"content": verify_reply}, "finish_reason": finish_reason}]}
+        else:
+            body = {"choices": [{"message": {"content": _FIRST_PASS_TRIAGE_UNTICKED}, "finish_reason": "stop"}]}
+        start_response("200 OK", [("Content-Type", "application/json")])
+        return [json.dumps(body).encode()]
+
+    srv = make_server("127.0.0.1", 0, _app, handler_class=_Quiet)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    time.sleep(0.1)
+    _clear_env(keep_env_file=False)
+    try:
+        os.environ.update({
+            "DMAT_ENGINE": "vision",
+            "DMAT_VISION_BASE_URL": f"http://127.0.0.1:{srv.server_port}",
+            "DMAT_VISION_MODEL": "datalab-to/chandra-ocr-2",
+            "DMAT_VERIFY": "1",
+            **(extra_env or {}),
+        })
+        with _fresh_client() as client:
+            r = client.post("/api/v1/ocr/analyze", files={"file": ("a.jpg", _photo(), "image/jpeg")})
+            assert r.status_code == 200, r.text
+            return seen, r.json()["fields"], r.json()["stages"]
+    finally:
+        srv.shutdown()
+        _clear_env(keep_env_file=False)
+
+
+def test_verify_uses_small_token_cap_but_transcription_does_not():
+    """複查只回答一個選項,上限應為 DMAT_VERIFY_MAX_TOKENS(預設 128);整頁轉寫維持原本上限。"""
+    seen, f, _ = _run_with_verify_reply("3", "stop")
+    transcribe = [mt for is_v, mt in seen if not is_v]
+    verifies = [mt for is_v, mt in seen if is_v]
+    assert transcribe == [8192], seen
+    assert verifies and all(mt == 128 for mt in verifies), seen
+    assert f["triage"]["value"] == "3", "正常簡短的回答仍應被採用"
+
+    seen, _, _ = _run_with_verify_reply("3", "stop", {"DMAT_VERIFY_MAX_TOKENS": "32"})
+    assert all(mt == 32 for is_v, mt in seen if is_v), seen
+
+
+def test_truncated_verify_answer_is_not_applied():
+    """模型沒照指示、又把整頁轉寫一遍而被截斷時,不得從中硬抓數字(會抓到標題的「1.檢傷分類」)。"""
+    rambling = "<p>1.檢傷分類:<input type='checkbox'>1 復甦急救 <input type='checkbox' checked>3 非緊急</p><p>3.基本"
+    _, f, stages = _run_with_verify_reply(rambling, "length")
+
+    assert f["triage"]["value"] != "1", f"不可從被截斷的長篇輸出抓出標題項次:{f['triage']}"
+    triage_stage = [s for s in stages if s["stage"] == "verify" and s["target"] == "檢傷分類"]
+    assert triage_stage and triage_stage[0]["truncated"] is True and triage_stage[0]["applied"] is False, stages
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

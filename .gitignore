@@ -11,3 +11,9 @@ src/ai-service/.env
 src/ai-service/.env.bak
 # 由 scripts/setup-ocr.sh 產生
 scripts/start-vllm.sh
+
+# 由 scripts/backup-data.sh 產生(含病患個資與金鑰,絕不可提交)
+backups/
+
+# 由 scripts/install-desktop-launcher.sh 產生的啟動器含本機絕對路徑(帳號名稱),只提交 .in 範本
+*.desktop

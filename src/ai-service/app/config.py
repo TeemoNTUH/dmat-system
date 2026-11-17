@@ -97,6 +97,14 @@ def resolve_prompt_style(model_name: str) -> str:
 # 因此只在偵測到不確定時觸發,並以 MAX_TASKS 設上限。
 VERIFY_ENABLED = _flag("DMAT_VERIFY", True)
 VERIFY_MAX_TASKS = int(os.getenv("DMAT_VERIFY_MAX_TASKS", "4"))
+# 複查同時送出的題數上限;0 = 不限制(全部同時送出,交給推論伺服器批次處理)。
+# 推論端 GPU 記憶體吃緊、或後端不支援併發(如單執行緒 llama.cpp)時可設為 1 恢復逐題送出。
+VERIFY_CONCURRENCY = int(os.getenv("DMAT_VERIFY_CONCURRENCY", "0"))
+# 複查回答的輸出上限(token)。複查只需回答「3」「2,7」或一個編號,幾個 token 就夠;
+# 但 OCR 專用模型有時不照指示,又把整頁重新轉寫一遍,若沿用轉寫的上限(8192)
+# 一題複查就要跑一兩分鐘。設小上限後,這種情況會很快被截斷,
+# 且被截斷的回答一律不採用(見 vision_engine._verify),以免從長篇轉寫裡誤抓數字。
+VERIFY_MAX_TOKENS = int(os.getenv("DMAT_VERIFY_MAX_TOKENS", "128"))
 
 # ---- 本機 HuggingFace 推論(chandra_hf) -----------------------------------
 HF_MODEL_ID = os.getenv("DMAT_HF_MODEL_ID", "datalab-to/chandra-ocr-2")

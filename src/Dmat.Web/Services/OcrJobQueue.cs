@@ -19,8 +19,9 @@ public class OcrJobQueue
 {
     // 無界佇列:現場單站的影像量有限,且寧可全部收下也不要拒收現場資料。
     // 背景服務逐一處理,不會因為佇列長就同時吃掉大量記憶體(佇列裡只有 Guid)。
+    // 多個讀取者:背景服務可依 AiService:Concurrency 同時處理多張(見 OcrBackgroundWorker)。
     private readonly Channel<Guid> _channel = Channel.CreateUnbounded<Guid>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
 
     //: 已在佇列中等待的影像。**同一張影像不重複排隊。**
     //
@@ -32,6 +33,15 @@ public class OcrJobQueue
     // 只擋「還在排隊」的重複。已經被取出、正在辨識中的影像仍可再次排入 ——
     // 那代表使用者在看到結果後明確按了「重新辨識」,是新的意圖,不該吃掉。
     private readonly HashSet<Guid> _queued = [];
+
+    //: 正在辨識中的影像,以及「辨識中又被要求重新辨識」的影像。
+    //
+    // 同時處理多張之後,上面的去重不夠:正在辨識的影像被按「重新辨識」會再次入列,
+    // 另一個工作者若立刻取到它,兩個工作就會同時辨識同一張、互相覆寫結果。
+    // 因此同一張影像同一時間只允許一個工作者處理;撞上時不丟掉這次要求,
+    // 而是記下來,等目前這一輪結束後再排回佇列(保留「使用者要重跑」的意圖)。
+    private readonly HashSet<Guid> _processing = [];
+    private readonly HashSet<Guid> _rerunRequested = [];
     private readonly object _gate = new();   // .NET 8:用 object,System.Threading.Lock 是 .NET 9 才有
 
     /// <summary>尚未開始處理的工作數(供狀態顯示)。</summary>
@@ -60,5 +70,37 @@ public class OcrJobQueue
         var id = await _channel.Reader.ReadAsync(ct);
         lock (_gate) _queued.Remove(id);
         return id;
+    }
+
+    /// <summary>正在辨識中的工作數(供狀態顯示)。</summary>
+    public int InProgress
+    {
+        get { lock (_gate) return _processing.Count; }
+    }
+
+    /// <summary>
+    /// 工作者開始處理前呼叫。若同一張影像已有其他工作者在處理,回傳 false,
+    /// 並記下「結束後要再跑一次」—— 呼叫端應跳過這張,改取下一張。
+    /// </summary>
+    public bool TryBeginProcessing(Guid imageId)
+    {
+        lock (_gate)
+        {
+            if (_processing.Add(imageId)) return true;
+            _rerunRequested.Add(imageId);
+            return false;
+        }
+    }
+
+    /// <summary>處理結束(成功、失敗或例外)後一律呼叫;若期間有人要求重跑,重新排入佇列。</summary>
+    public void EndProcessing(Guid imageId)
+    {
+        bool rerun;
+        lock (_gate)
+        {
+            _processing.Remove(imageId);
+            rerun = _rerunRequested.Remove(imageId);
+        }
+        if (rerun) Enqueue(imageId);
     }
 }
